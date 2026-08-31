@@ -4,8 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fs::File;
-use std::io::BufReader;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 
 use archivindex_warc::io::read::WarcReader;
 use archivindex_warc::record::extension::NoExtension;
@@ -99,9 +99,35 @@ fn validate(route: &str, value: &Value) -> Option<Result<(), serde_json::Error>>
 }
 
 impl Corpus {
-    fn scan(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("reading {path}");
-        let reader = WarcReader::new(BufReader::new(File::open(path)?));
+    fn scan_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        if path.is_dir() {
+            let mut entries = std::fs::read_dir(path)?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<Result<Vec<_>, _>>()?;
+            entries.sort();
+            for entry in entries.into_iter().filter(|entry| entry.is_file()) {
+                self.scan_file(&entry)?;
+            }
+        } else {
+            self.scan_file(path)?;
+        }
+
+        Ok(())
+    }
+
+    fn scan_file(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        eprintln!("reading {}", path.display());
+        if path.extension().is_some_and(|extension| extension == "gz") {
+            self.scan_reader(WarcReader::from_path_gzip(path)?)
+        } else {
+            self.scan_reader(WarcReader::from_path(path)?)
+        }
+    }
+
+    fn scan_reader<R: BufRead>(
+        &mut self,
+        reader: WarcReader<R>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         for result in reader.iter_records::<NoExtension>().records() {
             self.records += 1;
             let record = result?;
@@ -216,7 +242,7 @@ impl Corpus {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut corpus = Corpus::default();
     for path in env::args().skip(1) {
-        corpus.scan(&path)?;
+        corpus.scan_path(&PathBuf::from(path))?;
     }
 
     corpus.report()
