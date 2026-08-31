@@ -1,7 +1,29 @@
+//! Models for the `WordPress` REST API.
+
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::BTreeMap;
+
+pub mod discovery;
+pub mod extensions;
+pub mod link;
+pub mod media;
+pub mod resource;
+
+pub use discovery::{
+    ApiRoot, ApplicationPasswordEndpoints, ApplicationPasswords, Authentication,
+    AuthenticationMethods, ErrorData, ErrorResponse, HasArchive, Namespace, NoAuthenticationMethod,
+    Taxonomy, TemplateLock, TemplateLockMode, Type,
+};
+pub use extensions::{
+    AmpUserMetadata, ElementorIntroduction, JetpackMedia, JetpackRelatedPosts, JetpackSharing,
+    JetpackVideoPress, NullableYoastMetadata, UagbAuthorInfo, UagbMetadata, YoastMetadata,
+};
+pub use link::{Link, Links, TargetHints};
+pub use media::{Media, MediaKind, MediaStatus, MediaType};
+pub use resource::{
+    Category, CategoryTaxonomy, Comment, CommentKind, CommentStatus, DiscussionStatus, Page,
+    PageKind, Post, PostFormat, PostStatus, Tag, TagTaxonomy, User,
+};
 
 /// A `{ "rendered": … }` value, as returned for titles, content, and excerpts.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -11,88 +33,28 @@ pub struct Rendered {
     pub protected: Option<bool>,
 }
 
-/// Publication state observed for posts and pages.
+/// The local and UTC publication dates that occur together on content resources.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PostStatus {
-    Publish,
+#[serde(deny_unknown_fields)]
+pub struct PublicationDates {
+    pub date: Option<NaiveDateTime>,
+    pub date_gmt: Option<NaiveDateTime>,
 }
 
-/// Moderation state observed for public comments.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommentStatus {
-    Approved,
+impl PublicationDates {
+    /// The publication time, from the UTC field.
+    #[must_use]
+    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+        self.date_gmt.map(|value| Utc.from_utc_datetime(&value))
+    }
 }
 
-/// Publication state observed for media attachments.
+/// The local and UTC modification dates that occur together on mutable resources.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MediaStatus {
-    Inherit,
-}
-
-/// Whether comments or pings are accepted for a resource.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiscussionStatus {
-    #[serde(rename = "")]
-    Unavailable,
-    Closed,
-    Open,
-}
-
-/// Presentation format selected for a post.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PostFormat {
-    Aside,
-    Audio,
-    Standard,
-    Video,
-}
-
-/// Broad attachment category reported by the media endpoint.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MediaType {
-    File,
-    Image,
-}
-
-/// Resource discriminator returned by the page endpoint.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PageKind {
-    Page,
-}
-
-/// Resource discriminator returned by the comment endpoint.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommentKind {
-    Comment,
-}
-
-/// Resource discriminator returned by the media endpoint.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MediaKind {
-    Attachment,
-}
-
-/// Taxonomy discriminator returned by the category endpoint.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CategoryTaxonomy {
-    Category,
-}
-
-/// Taxonomy discriminator returned by the tag endpoint.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TagTaxonomy {
-    PostTag,
+#[serde(deny_unknown_fields)]
+pub struct ModificationDates {
+    pub modified: Option<NaiveDateTime>,
+    pub modified_gmt: Option<NaiveDateTime>,
 }
 
 /// A GMT offset represented as either a JSON number or a numeric string.
@@ -103,480 +65,11 @@ pub enum GmtOffset {
     String(String),
 }
 
-/// Author metadata added by Ultimate Addons for Gutenberg.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct UagbAuthorInfo {
-    pub display_name: String,
-    pub author_link: String,
-}
-
-/// `VideoPress` metadata attached to media resources by Jetpack.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct JetpackVideoPress {
-    pub title: String,
-    pub description: String,
-    pub caption: String,
-    pub guid: (),
-    pub rating: (),
-    pub allow_download: u64,
-    pub display_embed: u64,
-    pub privacy_setting: u64,
-    pub needs_playback_token: bool,
-    pub is_private: bool,
-    pub private_enabled_for_site: bool,
-}
-
-/// Elementor introduction state represented as an empty marker or named flags.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum ElementorIntroduction {
-    Marker(String),
-    Flags(BTreeMap<String, bool>),
-}
-
-/// Link relations included in `WordPress` REST API resources.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Links {
-    pub about: Option<Vec<Link>>,
-    pub author: Option<Vec<Link>>,
-    pub children: Option<Vec<Link>>,
-    pub collection: Option<Vec<Link>>,
-    pub curies: Option<Vec<Link>>,
-    pub help: Option<Vec<Link>>,
-    #[serde(rename = "in-reply-to")]
-    pub in_reply_to: Option<Vec<Link>>,
-    #[serde(rename = "predecessor-version")]
-    pub predecessor_version: Option<Vec<Link>>,
-    pub replies: Option<Vec<Link>>,
-    #[serde(rename = "self")]
-    pub self_links: Option<Vec<Link>>,
-    pub up: Option<Vec<Link>>,
-    #[serde(rename = "version-history")]
-    pub version_history: Option<Vec<Link>>,
-    #[serde(rename = "wp:attached-to")]
-    pub wp_attached_to: Option<Vec<Link>>,
-    #[serde(rename = "wp:attachment")]
-    pub wp_attachment: Option<Vec<Link>>,
-    #[serde(rename = "wp:featuredmedia")]
-    pub wp_featured_media: Option<Vec<Link>>,
-    #[serde(rename = "wp:items")]
-    pub wp_items: Option<Vec<Link>>,
-    #[serde(rename = "wp:post_type")]
-    pub wp_post_type: Option<Vec<Link>>,
-    #[serde(rename = "wp:term")]
-    pub wp_term: Option<Vec<Link>>,
-}
-
-/// One entry in a `WordPress` REST API link relation.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Link {
-    pub href: String,
-    pub embeddable: Option<bool>,
-    pub templated: Option<bool>,
-    pub name: Option<String>,
-    pub id: Option<u64>,
-    pub count: Option<u64>,
-    pub post_type: Option<String>,
-    pub taxonomy: Option<String>,
-    #[serde(rename = "type")]
-    pub kind: Option<String>,
-    #[serde(rename = "targetHints")]
-    pub target_hints: Option<TargetHints>,
-}
-
-/// HTTP methods advertised for a link target.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TargetHints {
-    pub allow: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Post {
-    pub id: u64,
-    pub date: Option<NaiveDateTime>,
-    pub date_gmt: Option<NaiveDateTime>,
-    pub modified: Option<NaiveDateTime>,
-    pub modified_gmt: Option<NaiveDateTime>,
-    pub slug: String,
-    pub status: PostStatus,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub link: String,
-    pub title: Rendered,
-    pub content: Option<Rendered>,
-    pub excerpt: Option<Rendered>,
-    pub guid: Rendered,
-    pub author: Option<u64>,
-    pub featured_media: Option<u64>,
-    pub comment_status: Option<DiscussionStatus>,
-    pub ping_status: Option<DiscussionStatus>,
-    pub sticky: Option<bool>,
-    pub format: Option<PostFormat>,
-    pub template: String,
-    pub categories: Option<Vec<u64>>,
-    pub tags: Option<Vec<u64>>,
-    pub meta: Option<Value>,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub acf: Option<Value>,
-    pub class_list: Option<Vec<String>>,
-    pub yoast_head: Option<String>,
-    pub yoast_head_json: Option<Value>,
-    pub audio_player: Option<Value>,
-    pub download_link: Option<Value>,
-    pub episode_data: Option<Value>,
-    pub episode_featured_image: Option<Value>,
-    pub episode_player_image: Option<Value>,
-    pub player_link: Option<Value>,
-    pub series: Option<Value>,
-    #[serde(rename = "jetpack-related-posts")]
-    pub jetpack_related_posts: Option<Value>,
-    pub jetpack_featured_media_url: Option<String>,
-    pub jetpack_publicize_connections: Option<Value>,
-    pub jetpack_sharing_enabled: Option<bool>,
-    pub jetpack_shortlink: Option<String>,
-    pub advanced_ads_groups: Option<Value>,
-    pub gallery_data: Option<Value>,
-    pub uagb_author_info: Option<UagbAuthorInfo>,
-    pub uagb_comment_info: Option<u64>,
-    pub uagb_excerpt: Option<String>,
-    pub uagb_featured_image_src: Option<BTreeMap<String, bool>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Page {
-    pub id: u64,
-    pub date: Option<NaiveDateTime>,
-    pub date_gmt: Option<NaiveDateTime>,
-    pub modified: Option<NaiveDateTime>,
-    pub modified_gmt: Option<NaiveDateTime>,
-    pub slug: String,
-    pub status: PostStatus,
-    #[serde(rename = "type")]
-    pub kind: PageKind,
-    pub link: String,
-    pub title: Rendered,
-    pub content: Rendered,
-    pub excerpt: Rendered,
-    pub guid: Rendered,
-    pub author: u64,
-    pub parent: u64,
-    pub menu_order: i64,
-    pub featured_media: u64,
-    pub comment_status: DiscussionStatus,
-    pub ping_status: DiscussionStatus,
-    pub template: String,
-    pub meta: Value,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub acf: Option<Value>,
-    pub class_list: Option<Vec<String>>,
-    pub yoast_head: Option<String>,
-    pub yoast_head_json: Option<Value>,
-    pub jetpack_sharing_enabled: Option<bool>,
-    pub jetpack_shortlink: Option<String>,
-    pub uagb_author_info: Option<UagbAuthorInfo>,
-    pub uagb_comment_info: Option<u64>,
-    pub uagb_excerpt: Option<String>,
-    pub uagb_featured_image_src: Option<BTreeMap<String, bool>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Category {
-    pub id: u64,
-    pub count: u64,
-    pub description: String,
-    pub link: String,
-    pub name: String,
-    pub slug: String,
-    pub taxonomy: CategoryTaxonomy,
-    pub parent: u64,
-    pub meta: Value,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub acf: Option<Value>,
-    pub yoast_head: Option<String>,
-    pub yoast_head_json: Option<Value>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Tag {
-    pub id: u64,
-    pub count: u64,
-    pub description: String,
-    pub link: String,
-    pub name: String,
-    pub slug: String,
-    pub taxonomy: TagTaxonomy,
-    pub meta: Value,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub acf: Option<Value>,
-    pub yoast_head: Option<String>,
-    pub yoast_head_json: Option<Value>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct User {
-    pub id: u64,
-    pub name: String,
-    pub url: String,
-    pub description: String,
-    pub link: String,
-    pub slug: String,
-    pub avatar_urls: Option<BTreeMap<String, String>>,
-    pub is_super_admin: Option<bool>,
-    pub meta: Value,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub acf: Option<Value>,
-    pub mpp_avatar: Option<Value>,
-    pub woocommerce_meta: Option<Value>,
-    pub yoast_head: Option<String>,
-    pub yoast_head_json: Option<Value>,
-    pub amp_dev_tools_enabled: Option<bool>,
-    pub amp_review_panel_dismissed_for_template_mode: Option<String>,
-    pub elementor_introduction: Option<ElementorIntroduction>,
-    pub user_switching_url: Option<()>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Comment {
-    pub id: u64,
-    pub post: u64,
-    pub parent: u64,
-    pub author: u64,
-    pub author_name: String,
-    pub author_url: String,
-    pub date: Option<NaiveDateTime>,
-    pub date_gmt: Option<NaiveDateTime>,
-    pub content: Rendered,
-    pub link: String,
-    pub status: CommentStatus,
-    #[serde(rename = "type")]
-    pub kind: CommentKind,
-    pub author_avatar_urls: Option<BTreeMap<String, String>>,
-    pub meta: Value,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub acf: Option<Value>,
-}
-
-/// `has_archive` is either a flag or the archive's slug.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum HasArchive {
-    Enabled(bool),
-    Slug(String),
-}
-
-/// A template lock represented as a flag or a named lock mode.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum TemplateLock {
-    Enabled(bool),
-    Mode(TemplateLockMode),
-}
-
-/// Named template-lock modes observed in post-type registries.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TemplateLockMode {
-    All,
-}
-
-/// Authentication metadata advertised by the REST API root.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum Authentication {
-    Methods(AuthenticationMethods),
-    Empty(Vec<NoAuthenticationMethod>),
-}
-
-/// Authentication methods advertised by newer REST API roots.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AuthenticationMethods {
-    #[serde(rename = "application-passwords")]
-    pub application_passwords: Option<ApplicationPasswords>,
-}
-
-/// An uninhabited type that restricts legacy authentication arrays to empty arrays.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum NoAuthenticationMethod {}
-
-/// `WordPress` application-password authentication metadata.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ApplicationPasswords {
-    pub endpoints: ApplicationPasswordEndpoints,
-}
-
-/// Endpoints used to authorize `WordPress` application passwords.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ApplicationPasswordEndpoints {
-    pub authorization: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Type {
-    pub name: String,
-    pub slug: String,
-    pub description: String,
-    pub hierarchical: bool,
-    pub has_archive: Option<HasArchive>,
-    pub taxonomies: Vec<String>,
-    pub rest_base: String,
-    pub rest_namespace: Option<String>,
-    pub icon: Option<String>,
-    pub template: Option<Value>,
-    pub template_lock: Option<TemplateLock>,
-    #[serde(rename = "_links")]
-    pub links: Links,
-    pub yoast_head: Option<String>,
-    pub yoast_head_json: Option<Value>,
-}
-
-/// The discovery document at the REST API root.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ApiRoot {
-    pub name: String,
-    pub description: String,
-    pub url: String,
-    pub home: String,
-    pub gmt_offset: GmtOffset,
-    pub timezone_string: String,
-    pub namespaces: Vec<String>,
-    pub authentication: Authentication,
-    pub routes: BTreeMap<String, Value>,
-    pub site_logo: u64,
-    pub site_icon: u64,
-    pub site_icon_url: String,
-    pub page_for_posts: Option<u64>,
-    pub page_on_front: Option<u64>,
-    pub show_on_front: Option<String>,
-    #[serde(rename = "_links")]
-    pub links: Links,
-}
-
-/// A REST API namespace discovery document.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Namespace {
-    pub namespace: String,
-    pub routes: BTreeMap<String, Value>,
-    #[serde(rename = "_links")]
-    pub links: Links,
-}
-
-/// Machine-readable details attached to a REST API error.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ErrorData {
-    pub status: u16,
-}
-
-/// An error returned by the REST API.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ErrorResponse {
-    pub code: String,
-    pub message: String,
-    pub data: ErrorData,
-}
-
-/// A taxonomy advertised by the `/wp/v2/taxonomies` registry.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Taxonomy {
-    pub name: String,
-    pub slug: String,
-    pub description: String,
-    pub hierarchical: bool,
-    pub types: Vec<String>,
-    pub rest_base: String,
-    pub rest_namespace: String,
-    #[serde(rename = "_links")]
-    pub links: Links,
-}
-
-/// An attachment returned by the `/wp/v2/media` collection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Media {
-    pub id: u64,
-    pub date: Option<NaiveDateTime>,
-    pub date_gmt: Option<NaiveDateTime>,
-    pub modified: Option<NaiveDateTime>,
-    pub modified_gmt: Option<NaiveDateTime>,
-    pub slug: String,
-    pub status: MediaStatus,
-    #[serde(rename = "type")]
-    pub kind: MediaKind,
-    pub link: String,
-    pub title: Rendered,
-    pub guid: Rendered,
-    pub author: u64,
-    pub featured_media: Option<u64>,
-    pub comment_status: DiscussionStatus,
-    pub ping_status: DiscussionStatus,
-    pub template: String,
-    pub meta: Value,
-    pub class_list: Option<Vec<String>>,
-    pub acf: Option<Value>,
-    pub description: Rendered,
-    pub caption: Rendered,
-    pub alt_text: String,
-    pub media_type: MediaType,
-    pub mime_type: String,
-    pub media_details: Value,
-    pub post: Option<u64>,
-    pub source_url: String,
-    pub filename: Option<String>,
-    pub filesize: Option<u64>,
-    #[serde(rename = "_links")]
-    pub links: Option<Links>,
-    pub jetpack_sharing_enabled: Option<bool>,
-    pub jetpack_shortlink: Option<String>,
-    pub jetpack_videopress: Option<JetpackVideoPress>,
-    pub jetpack_videopress_guid: Option<String>,
-}
-
-macro_rules! timestamp {
-    ($type:ty) => {
-        impl $type {
-            /// The publication time, from the API's UTC field.
-            pub fn timestamp(&self) -> Option<DateTime<Utc>> {
-                self.date_gmt.map(|value| Utc.from_utc_datetime(&value))
-            }
-        }
-    };
-}
-
-timestamp!(Post);
-timestamp!(Page);
-timestamp!(Comment);
-timestamp!(Media);
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         ApiRoot, Authentication, DiscussionStatus, ErrorResponse, Media, MediaType, Namespace,
@@ -704,11 +197,29 @@ mod tests {
         .expect("a legacy type registry");
 
         assert_eq!(types["post"].rest_namespace, None);
+        assert_eq!(
+            (&types["post"].yoast.head, &types["post"].yoast.head_json),
+            (&None, &None)
+        );
+
+        let with_redacted_yoast = serde_json::from_value::<Type>(json!({
+            "name": "Pages",
+            "description": "",
+            "hierarchical": true,
+            "slug": "page",
+            "taxonomies": [],
+            "rest_base": "pages",
+            "yoast_head": null,
+            "yoast_head_json": null,
+            "_links": {}
+        }))
+        .expect("a type with redacted Yoast metadata");
+        let yoast = with_redacted_yoast.yoast;
+        assert_eq!((yoast.head, yoast.head_json), (None, None));
     }
 
-    #[test]
-    fn media_attachments_parse() {
-        let media = serde_json::from_value::<Media>(json!({
+    fn media_attachment() -> Value {
+        json!({
             "id": 42,
             "date": "2026-08-28T17:57:06",
             "date_gmt": "2026-08-28T21:57:06",
@@ -735,13 +246,59 @@ mod tests {
             "source_url": "https://example.com/example.png",
             "filesize": null,
             "_links": {}
-        }))
-        .expect("a media attachment");
+        })
+    }
+
+    #[test]
+    fn media_attachments_parse() {
+        let media =
+            serde_json::from_value::<Media>(media_attachment()).expect("a media attachment");
 
         assert_eq!(
             media.timestamp().expect("a timestamp").to_rfc3339(),
             "2026-08-28T21:57:06+00:00"
         );
+        assert_eq!(media.jetpack, None);
+    }
+
+    #[test]
+    fn partial_jetpack_media_metadata_is_rejected() {
+        let mut complete = media_attachment();
+        let object = complete.as_object_mut().expect("a media object");
+        object.insert("jetpack_sharing_enabled".to_owned(), json!(true));
+        object.insert(
+            "jetpack_shortlink".to_owned(),
+            json!("https://wp.me/example"),
+        );
+        object.insert(
+            "jetpack_videopress".to_owned(),
+            json!({
+                "title": "Example video",
+                "description": "",
+                "caption": "",
+                "guid": null,
+                "rating": null,
+                "allow_download": 0,
+                "display_embed": 0,
+                "privacy_setting": 2,
+                "needs_playback_token": false,
+                "is_private": false,
+                "private_enabled_for_site": false
+            }),
+        );
+        object.insert("jetpack_videopress_guid".to_owned(), json!("video-guid"));
+
+        let media = serde_json::from_value::<Media>(complete.clone()).expect("Jetpack media");
+        assert_eq!(
+            media.jetpack.expect("Jetpack metadata").videopress_guid,
+            "video-guid"
+        );
+
+        complete
+            .as_object_mut()
+            .expect("a media object")
+            .remove("jetpack_videopress_guid");
+        assert!(serde_json::from_value::<Media>(complete).is_err());
     }
 
     #[test]
