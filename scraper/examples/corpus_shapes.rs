@@ -1,6 +1,8 @@
 //! Validate the `WordPress` REST API JSON captured in WARC files against the model crate.
 //!
-//! Set `SHOW_SHAPES` to report the observed field names and JSON types for each route.
+//! Set `SHOW_SHAPES` to report top-level field names and JSON types for each route. Use
+//! `SHOW_FIELDS` with a comma-separated field list to recursively report selected shapes;
+//! `MERGE_FIELD_ROUTES` combines those observations across routes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -30,10 +32,20 @@ struct Shape {
 #[derive(Default)]
 struct Corpus {
     shapes: BTreeMap<String, Shape>,
+    field_shapes: BTreeMap<String, FieldShape>,
+    inspected_fields: BTreeSet<String>,
+    merge_field_routes: bool,
     records: usize,
     json_payloads: usize,
     validation: BTreeMap<String, BTreeMap<String, usize>>,
     unhandled: BTreeMap<String, usize>,
+}
+
+#[derive(Default)]
+struct FieldShape {
+    count: usize,
+    types: BTreeSet<&'static str>,
+    samples: BTreeSet<String>,
 }
 
 const fn kind(value: &Value) -> &'static str {
@@ -53,6 +65,37 @@ fn add_keys(
 ) {
     for (name, value) in object {
         keys.entry(name.clone()).or_default().insert(kind(value));
+    }
+}
+
+fn add_field_shape(shapes: &mut BTreeMap<String, FieldShape>, path: &str, value: &Value) {
+    let shape = shapes.entry(path.to_owned()).or_default();
+    shape.count += 1;
+    shape.types.insert(kind(value));
+    if shape.samples.len() < 4 {
+        match value {
+            Value::Null | Value::Bool(_) | Value::Number(_) => {
+                shape.samples.insert(value.to_string());
+            }
+            Value::String(value) if value.len() <= 120 => {
+                shape.samples.insert(format!("{value:?}"));
+            }
+            _ => {}
+        }
+    }
+
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                add_field_shape(shapes, &format!("{path}[]"), value);
+            }
+        }
+        Value::Object(object) => {
+            for (name, value) in object {
+                add_field_shape(shapes, &format!("{path}.{name}"), value);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -99,6 +142,21 @@ fn validate(route: &str, value: &Value) -> Option<Result<(), serde_json::Error>>
 }
 
 impl Corpus {
+    fn new() -> Self {
+        let inspected_fields = env::var("SHOW_FIELDS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|field| !field.is_empty())
+            .map(str::to_owned)
+            .collect();
+
+        Self {
+            inspected_fields,
+            merge_field_routes: env::var_os("MERGE_FIELD_ROUTES").is_some(),
+            ..Self::default()
+        }
+    }
+
     fn scan_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if path.is_dir() {
             let mut entries = std::fs::read_dir(path)?
@@ -156,7 +214,7 @@ impl Corpus {
                 }
                 None => *self.unhandled.entry(route.clone()).or_default() += 1,
             }
-            let shape = self.shapes.entry(route).or_default();
+            let shape = self.shapes.entry(route.clone()).or_default();
             shape.payloads += 1;
             match value {
                 Value::Array(values) => {
@@ -165,12 +223,38 @@ impl Corpus {
                     for value in values {
                         if let Value::Object(object) = value {
                             add_keys(&mut shape.keys, &object);
+                            for field in &self.inspected_fields {
+                                if let Some(value) = object.get(field) {
+                                    add_field_shape(
+                                        &mut self.field_shapes,
+                                        &if self.merge_field_routes {
+                                            field.clone()
+                                        } else {
+                                            format!("{route}.{field}")
+                                        },
+                                        value,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
                 Value::Object(object) => {
                     shape.objects += 1;
                     add_keys(&mut shape.keys, &object);
+                    for field in &self.inspected_fields {
+                        if let Some(value) = object.get(field) {
+                            add_field_shape(
+                                &mut self.field_shapes,
+                                &if self.merge_field_routes {
+                                    field.clone()
+                                } else {
+                                    format!("{route}.{field}")
+                                },
+                                value,
+                            );
+                        }
+                    }
                     for value in object.values() {
                         if let Value::Object(entry) = value {
                             add_keys(&mut shape.entry_keys, entry);
@@ -213,6 +297,23 @@ impl Corpus {
                 }
             }
         }
+        if !self.inspected_fields.is_empty() {
+            for (path, shape) in self.field_shapes {
+                println!(
+                    "{path}: {} ({}){}",
+                    shape.types.into_iter().collect::<Vec<_>>().join("|"),
+                    shape.count,
+                    if shape.samples.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " = {}",
+                            shape.samples.into_iter().collect::<Vec<_>>().join(" | ")
+                        )
+                    }
+                );
+            }
+        }
 
         if self.validation.is_empty() && self.unhandled.is_empty() {
             println!(
@@ -240,7 +341,7 @@ impl Corpus {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut corpus = Corpus::default();
+    let mut corpus = Corpus::new();
     for path in env::args().skip(1) {
         corpus.scan_path(&PathBuf::from(path))?;
     }

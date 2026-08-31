@@ -12,6 +12,81 @@ pub struct Rendered {
     pub protected: bool,
 }
 
+/// Link relations included in `WordPress` REST API resources.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Links {
+    #[serde(default)]
+    pub about: Vec<Link>,
+    #[serde(default)]
+    pub author: Vec<Link>,
+    #[serde(default)]
+    pub children: Vec<Link>,
+    #[serde(default)]
+    pub collection: Vec<Link>,
+    #[serde(default)]
+    pub curies: Vec<Link>,
+    #[serde(default)]
+    pub help: Vec<Link>,
+    #[serde(default, rename = "in-reply-to")]
+    pub in_reply_to: Vec<Link>,
+    #[serde(default, rename = "predecessor-version")]
+    pub predecessor_version: Vec<Link>,
+    #[serde(default)]
+    pub replies: Vec<Link>,
+    #[serde(default, rename = "self")]
+    pub self_links: Vec<Link>,
+    #[serde(default)]
+    pub up: Vec<Link>,
+    #[serde(default, rename = "version-history")]
+    pub version_history: Vec<Link>,
+    #[serde(default, rename = "wp:attached-to")]
+    pub wp_attached_to: Vec<Link>,
+    #[serde(default, rename = "wp:attachment")]
+    pub wp_attachment: Vec<Link>,
+    #[serde(default, rename = "wp:featuredmedia")]
+    pub wp_featured_media: Vec<Link>,
+    #[serde(default, rename = "wp:items")]
+    pub wp_items: Vec<Link>,
+    #[serde(default, rename = "wp:post_type")]
+    pub wp_post_type: Vec<Link>,
+    #[serde(default, rename = "wp:term")]
+    pub wp_term: Vec<Link>,
+}
+
+/// One entry in a `WordPress` REST API link relation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Link {
+    pub href: String,
+    #[serde(default)]
+    pub embeddable: Option<bool>,
+    #[serde(default)]
+    pub templated: Option<bool>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub count: Option<u64>,
+    #[serde(default)]
+    pub post_type: Option<String>,
+    #[serde(default)]
+    pub taxonomy: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default, rename = "targetHints")]
+    pub target_hints: Option<TargetHints>,
+}
+
+/// HTTP methods advertised for a link target.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetHints {
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Post {
@@ -54,13 +129,13 @@ pub struct Post {
     #[serde(default)]
     pub meta: Value,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
     pub acf: Value,
     #[serde(default)]
-    pub class_list: Value,
+    pub class_list: Vec<String>,
     #[serde(default)]
-    pub yoast_head: Value,
+    pub yoast_head: Option<String>,
     #[serde(default)]
     pub yoast_head_json: Value,
     #[serde(default)]
@@ -80,7 +155,7 @@ pub struct Post {
     #[serde(default, rename = "jetpack-related-posts")]
     pub jetpack_related_posts: Value,
     #[serde(default)]
-    pub jetpack_featured_media_url: Value,
+    pub jetpack_featured_media_url: Option<String>,
     #[serde(default)]
     pub jetpack_publicize_connections: Value,
     #[serde(default)]
@@ -126,13 +201,13 @@ pub struct Page {
     #[serde(default)]
     pub meta: Value,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
     pub acf: Value,
     #[serde(default)]
-    pub class_list: Value,
+    pub class_list: Vec<String>,
     #[serde(default)]
-    pub yoast_head: Value,
+    pub yoast_head: Option<String>,
     #[serde(default)]
     pub yoast_head_json: Value,
 }
@@ -155,11 +230,11 @@ pub struct Category {
     #[serde(default)]
     pub meta: Value,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
     pub acf: Value,
     #[serde(default)]
-    pub yoast_head: Value,
+    pub yoast_head: Option<String>,
     #[serde(default)]
     pub yoast_head_json: Value,
 }
@@ -180,11 +255,11 @@ pub struct Tag {
     #[serde(default)]
     pub meta: Value,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
     pub acf: Value,
     #[serde(default)]
-    pub yoast_head: Value,
+    pub yoast_head: Option<String>,
     #[serde(default)]
     pub yoast_head_json: Value,
 }
@@ -208,7 +283,7 @@ pub struct User {
     #[serde(default)]
     pub meta: Value,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
     pub acf: Value,
     #[serde(default)]
@@ -216,7 +291,7 @@ pub struct User {
     #[serde(default)]
     pub woocommerce_meta: Value,
     #[serde(default)]
-    pub yoast_head: Value,
+    pub yoast_head: Option<String>,
     #[serde(default)]
     pub yoast_head_json: Value,
 }
@@ -249,7 +324,7 @@ pub struct Comment {
     #[serde(default)]
     pub meta: Value,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
     pub acf: Value,
 }
@@ -260,6 +335,28 @@ pub struct Comment {
 pub enum HasArchive {
     Enabled(bool),
     Slug(String),
+}
+
+/// Authentication methods advertised by the REST API root.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Authentication {
+    #[serde(default, rename = "application-passwords")]
+    pub application_passwords: Option<ApplicationPasswords>,
+}
+
+/// `WordPress` application-password authentication metadata.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationPasswords {
+    pub endpoints: ApplicationPasswordEndpoints,
+}
+
+/// Endpoints used to authorize `WordPress` application passwords.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationPasswordEndpoints {
+    pub authorization: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -280,15 +377,15 @@ pub struct Type {
     #[serde(default)]
     pub rest_namespace: String,
     #[serde(default)]
-    pub icon: Value,
+    pub icon: Option<String>,
     #[serde(default)]
     pub template: Value,
     #[serde(default)]
-    pub template_lock: Value,
+    pub template_lock: Option<bool>,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
     #[serde(default)]
-    pub yoast_head: Value,
+    pub yoast_head: Option<String>,
     #[serde(default)]
     pub yoast_head_json: Value,
 }
@@ -305,7 +402,7 @@ pub struct ApiRoot {
     pub timezone_string: String,
     pub namespaces: Vec<String>,
     #[serde(default)]
-    pub authentication: Value,
+    pub authentication: Authentication,
     #[serde(default)]
     pub routes: BTreeMap<String, Value>,
     #[serde(default)]
@@ -321,7 +418,7 @@ pub struct ApiRoot {
     #[serde(default)]
     pub show_on_front: String,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
 }
 
 /// A REST API namespace discovery document.
@@ -332,7 +429,14 @@ pub struct Namespace {
     #[serde(default)]
     pub routes: BTreeMap<String, Value>,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
+}
+
+/// Machine-readable details attached to a REST API error.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorData {
+    pub status: u16,
 }
 
 /// An error returned by the REST API.
@@ -342,7 +446,7 @@ pub struct ErrorResponse {
     pub code: String,
     pub message: String,
     #[serde(default)]
-    pub data: Value,
+    pub data: Option<ErrorData>,
 }
 
 /// A taxonomy advertised by the `/wp/v2/taxonomies` registry.
@@ -362,7 +466,7 @@ pub struct Taxonomy {
     #[serde(default)]
     pub rest_namespace: String,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
 }
 
 /// An attachment returned by the `/wp/v2/media` collection.
@@ -396,7 +500,7 @@ pub struct Media {
     #[serde(default)]
     pub meta: Value,
     #[serde(default)]
-    pub class_list: Value,
+    pub class_list: Vec<String>,
     #[serde(default)]
     pub acf: Value,
     #[serde(default)]
@@ -420,7 +524,7 @@ pub struct Media {
     #[serde(default)]
     pub filesize: Option<u64>,
     #[serde(default, rename = "_links")]
-    pub links: Value,
+    pub links: Links,
 }
 
 macro_rules! timestamp {
@@ -447,7 +551,7 @@ mod tests {
 
     #[test]
     fn api_discovery_documents_and_errors_parse() {
-        serde_json::from_value::<ApiRoot>(json!({
+        let root = serde_json::from_value::<ApiRoot>(json!({
             "name": "Example",
             "description": "An example site",
             "url": "https://example.com",
@@ -455,23 +559,51 @@ mod tests {
             "gmt_offset": -4,
             "timezone_string": "America/New_York",
             "namespaces": ["wp/v2"],
-            "authentication": {},
+            "authentication": {
+                "application-passwords": {
+                    "endpoints": {
+                        "authorization": "https://example.com/wp-admin/authorize-application.php"
+                    }
+                }
+            },
             "routes": {},
-            "_links": {}
+            "_links": {
+                "help": [{
+                    "href": "https://developer.wordpress.org/rest-api/",
+                    "targetHints": {"allow": ["GET"]}
+                }]
+            }
         }))
         .expect("an API root");
+        assert_eq!(
+            root.links.help[0]
+                .target_hints
+                .as_ref()
+                .expect("target hints")
+                .allow,
+            ["GET"]
+        );
+        assert_eq!(
+            root.authentication
+                .application_passwords
+                .expect("application-password authentication")
+                .endpoints
+                .authorization,
+            "https://example.com/wp-admin/authorize-application.php"
+        );
         serde_json::from_value::<Namespace>(json!({
             "namespace": "wp/v2",
             "routes": {},
             "_links": {}
         }))
         .expect("a namespace index");
-        serde_json::from_value::<ErrorResponse>(json!({
+        let error = serde_json::from_value::<ErrorResponse>(json!({
             "code": "rest_cannot_access",
             "message": "Sorry, you are not allowed to do that.",
             "data": {"status": 401}
         }))
         .expect("an API error");
+        assert_eq!(error.data.expect("error data").status, 401);
     }
 
     #[test]
