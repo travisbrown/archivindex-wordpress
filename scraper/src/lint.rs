@@ -178,6 +178,18 @@ enum StoredRevisitProfile {
     Other,
 }
 
+/// How an HTTP pagination link identifies the expected page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PageUriMatch {
+    Different,
+    Exact,
+    /// The URL differs only by an additional `attest=true` query parameter.
+    Attested,
+}
+
+const ATTEST_LINK_WARNING: &str =
+    "pagination Link targets add attest=true; treating it as an advisory query parameter";
+
 #[derive(Debug)]
 struct StoredMetadata {
     url: Option<String>,
@@ -1148,14 +1160,27 @@ fn check_header_links(
         let Some(expected_page) = expected_page else {
             continue;
         };
+        let mut attested = false;
         let found = metadata
             .headers("link")
             .filter_map(|value| std::str::from_utf8(value).ok())
             .flat_map(parse_links)
             .any(|(target, relations)| {
-                relations.iter().any(|value| value == relation)
-                    && same_page_uri(&target, &group.url, expected_page)
+                if !relations.iter().any(|value| value == relation) {
+                    return false;
+                }
+                match page_uri_match(&target, &group.url, expected_page) {
+                    PageUriMatch::Different => false,
+                    PageUriMatch::Exact => true,
+                    PageUriMatch::Attested => {
+                        attested = true;
+                        true
+                    }
+                }
             });
+        if attested {
+            warning_once(report, ATTEST_LINK_WARNING);
+        }
         if !found {
             warning(
                 report,
@@ -1189,16 +1214,16 @@ fn parse_links(value: &str) -> impl Iterator<Item = (String, Vec<String>)> + '_ 
     })
 }
 
-fn same_page_uri(candidate: &str, current: &str, expected_page: usize) -> bool {
+fn page_uri_match(candidate: &str, current: &str, expected_page: usize) -> PageUriMatch {
     let (Ok(candidate), Ok(current)) = (Url::parse(candidate), Url::parse(current)) else {
-        return false;
+        return PageUriMatch::Different;
     };
     if candidate.scheme() != current.scheme()
         || candidate.host_str() != current.host_str()
         || candidate.port_or_known_default() != current.port_or_known_default()
         || candidate.path() != current.path()
     {
-        return false;
+        return PageUriMatch::Different;
     }
     let query = |url: &Url| {
         url.query_pairs()
@@ -1207,7 +1232,18 @@ fn same_page_uri(candidate: &str, current: &str, expected_page: usize) -> bool {
     };
     let mut expected = query(&current);
     expected.insert("page".to_owned(), expected_page.to_string());
-    query(&candidate) == expected
+    let mut candidate = query(&candidate);
+    if candidate == expected {
+        return PageUriMatch::Exact;
+    }
+    if !expected.contains_key("attest")
+        && candidate.remove("attest").as_deref() == Some("true")
+        && candidate == expected
+    {
+        PageUriMatch::Attested
+    } else {
+        PageUriMatch::Different
+    }
 }
 
 fn response_metadata(group: &CaptureGroup) -> Option<http::ResponseMetadata> {
@@ -1278,14 +1314,24 @@ fn warning(report: &mut LintReport, message: String) {
     });
 }
 
+fn warning_once(report: &mut LintReport, message: &str) {
+    if !report
+        .findings
+        .iter()
+        .any(|finding| finding.severity == Severity::Warning && finding.message == message)
+    {
+        warning(report, message.to_owned());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
     use super::{
-        CaptureGroup, LintReport, PageCapture, Probe, StoredMetadata, StoredResponse,
-        StoredRevisit, StoredRevisitProfile, expected_initial, initial_capture_candidates,
-        is_server_challenge, lint_series, page_query, same_page_uri,
+        ATTEST_LINK_WARNING, CaptureGroup, LintReport, PageCapture, PageUriMatch, Probe,
+        StoredMetadata, StoredResponse, StoredRevisit, StoredRevisitProfile, expected_initial,
+        initial_capture_candidates, is_server_challenge, lint_series, page_query, page_uri_match,
     };
     use crate::archive::Site;
     use crate::endpoint::{Endpoint, ROOT_ENDPOINTS};
@@ -1466,8 +1512,48 @@ mod tests {
     #[test]
     fn link_targets_are_compared_by_query_values() {
         let encoded = page(2).replace(BEFORE, "2026-08-20T00%3A00%3A00Z");
-        assert!(same_page_uri(&encoded, &page(1), 2));
-        assert!(!same_page_uri(&page(3), &page(1), 2));
+        assert_eq!(page_uri_match(&encoded, &page(1), 2), PageUriMatch::Exact);
+        assert_eq!(
+            page_uri_match(&format!("{encoded}&attest=true"), &page(1), 2),
+            PageUriMatch::Attested
+        );
+        assert_eq!(
+            page_uri_match(&format!("{encoded}&attest=false"), &page(1), 2),
+            PageUriMatch::Different
+        );
+        assert_eq!(
+            page_uri_match(&format!("{encoded}&other=true"), &page(1), 2),
+            PageUriMatch::Different
+        );
+        assert_eq!(
+            page_uri_match(&page(3), &page(1), 2),
+            PageUriMatch::Different
+        );
+    }
+
+    #[test]
+    fn attested_pagination_links_produce_one_site_warning() {
+        let probe = probe();
+        let mut groups = vec![capture(1, &probe.url, 3)];
+        let via = groups[0].url.clone();
+        groups.push(capture(2, &via, 3));
+        let via = groups[1].url.clone();
+        groups.push(capture(3, &via, 3));
+        for group in &mut groups {
+            let response = group.response.as_mut().expect("a response");
+            let text = String::from_utf8(response.body.clone()).expect("an HTTP message");
+            response.body = text.replace(">; rel=", "&attest=true>; rel=").into_bytes();
+        }
+        let captures = pages(&groups);
+        let mut report = LintReport::default();
+
+        assert_eq!(
+            lint_series(&groups, &probe, &captures, &mut HashSet::new(), &mut report),
+            Some(3)
+        );
+        assert_eq!(report.error_count(), 0, "{:?}", report.findings);
+        assert_eq!(report.warning_count(), 1, "{:?}", report.findings);
+        assert_eq!(report.findings[0].message, ATTEST_LINK_WARNING);
     }
 
     #[test]
