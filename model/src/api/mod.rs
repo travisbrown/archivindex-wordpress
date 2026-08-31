@@ -354,7 +354,7 @@ pub struct Type {
     pub has_archive: Option<HasArchive>,
     pub taxonomies: Vec<String>,
     pub rest_base: String,
-    pub rest_namespace: String,
+    pub rest_namespace: Option<String>,
     pub icon: Option<String>,
     pub template: Option<Value>,
     pub template_lock: Option<bool>,
@@ -484,11 +484,13 @@ timestamp!(Media);
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::json;
 
     use super::{
         ApiRoot, DiscussionStatus, ErrorResponse, Media, MediaType, Namespace, Post, PostFormat,
-        Taxonomy,
+        Taxonomy, Type,
     };
 
     #[test]
@@ -582,6 +584,32 @@ mod tests {
         .expect("a taxonomy");
 
         assert_eq!(taxonomy.types, ["post"]);
+    }
+
+    #[test]
+    fn legacy_type_registry_entries_can_omit_the_implied_namespace() {
+        let types = serde_json::from_value::<BTreeMap<String, Type>>(json!({
+            "post": {
+                "name": "Posts",
+                "description": "",
+                "hierarchical": false,
+                "slug": "post",
+                "taxonomies": ["category", "post_tag"],
+                "rest_base": "posts",
+                "_links": {
+                    "collection": [{"href": "https://example.com/wp-json/wp/v2/types"}],
+                    "wp:items": [{"href": "https://example.com/wp-json/wp/v2/posts"}],
+                    "curies": [{
+                        "name": "wp",
+                        "href": "https://api.w.org/{rel}",
+                        "templated": true
+                    }]
+                }
+            }
+        }))
+        .expect("a legacy type registry");
+
+        assert_eq!(types["post"].rest_namespace, None);
     }
 
     #[test]

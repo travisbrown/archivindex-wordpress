@@ -70,8 +70,8 @@ pub struct EndpointType {
     pub slug: String,
     /// The collection route relative to its REST namespace.
     pub rest_base: String,
-    /// The REST namespace containing the collection, normally `wp/v2`.
-    pub rest_namespace: String,
+    /// The REST namespace containing the collection. Older `wp/v2` registries omit this field.
+    pub rest_namespace: Option<String>,
     /// Taxonomies registered for a post type. Absent from taxonomy responses.
     pub taxonomies: Option<Vec<String>>,
     /// Post types registered for a taxonomy. Absent from post-type responses.
@@ -115,7 +115,10 @@ impl EndpointType {
         entries
             .into_iter()
             .filter(|entry| {
-                entry.rest_namespace == "wp/v2"
+                entry
+                    .rest_namespace
+                    .as_deref()
+                    .is_none_or(|namespace| namespace == "wp/v2")
                     && entry.rest_base.parse::<Endpoint>().is_err()
                     // Temporarily probe the enumerated exclusions to determine which are public.
                     // && !ENDPOINT_EXCLUSIONS.contains(&entry.rest_base.as_str())
@@ -320,6 +323,15 @@ mod tests {
         )
     }
 
+    /// A registry entry in the legacy shape that implied the `wp/v2` namespace.
+    fn legacy_entry(rest_base: &str) -> String {
+        format!(
+            r#"{{"name": "", "description": "", "hierarchical": false, "slug": "{rest_base}",
+                "rest_base": "{rest_base}",
+                "_links": {{"wp:items": [{{"href": "https://example.com/x"}}]}}}}"#
+        )
+    }
+
     #[test]
     fn endpoint_names_parse_exactly() {
         for endpoint in Endpoint::ALL {
@@ -349,7 +361,6 @@ mod tests {
                 "hierarchical": false,
                 "slug": "post",
                 "rest_base": "posts",
-                "rest_namespace": "wp/v2",
                 "taxonomies": ["category", "post_tag"],
                 "_links": {"wp:items": [{"href": "https://example.com/wp-json/wp/v2/posts"}]}
             },
@@ -378,6 +389,7 @@ mod tests {
             &["category", "post_tag"]
         );
         assert_eq!(post.types, None);
+        assert_eq!(post.rest_namespace, None);
 
         assert_eq!(
             category.items_urls().collect::<Vec<_>>(),
@@ -398,7 +410,7 @@ mod tests {
         let response = format!(
             "{{\"video\": {}, \"post\": {}, \"template\": {}, \"product\": {}, \"again\": {}, \
              \"plugin\": {}, \"pattern\": {}, \"menu\": {}}}",
-            entry("videos", "wp/v2"),
+            legacy_entry("videos"),
             entry("posts", "wp/v2"),
             entry(ENDPOINT_EXCLUSIONS[1], "wp/v2"),
             entry("product", "wp/v2"),
