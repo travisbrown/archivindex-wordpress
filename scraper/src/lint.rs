@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use archivindex_warc::io::read::WarcReader;
 use archivindex_warc::record::header::{RevisitHeader, RevisitProfile};
 use archivindex_warc::record::{FieldsBlock, Record, http, payload};
-use archivindex_warc_ops::lint::{Findings, Linter, Rule};
+use archivindex_warc_ops::lint::{Findings, Linter, Rule, Violation};
 use serde_json::Value;
 use url::Url;
 
@@ -33,6 +33,8 @@ pub struct LintReport {
     /// The findings of the pass: those of the standard rules and those of the rules below, in
     /// the order the pass reported them.
     pub findings: Vec<Finding>,
+    /// Number of records that passed all core WARC lint rules.
+    pub core_lints_passed: usize,
     /// Successfully probed endpoints in probe order, with their advertised counts.
     pub pagination: Vec<PaginationSummary>,
     /// Number of required root captures found.
@@ -140,8 +142,9 @@ pub fn lint_archive(path: impl AsRef<Path>) -> Result<LintReport, Error> {
 fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintReport, Error> {
     let mut rule = WordPressRules::new(path);
     let mut findings = Vec::new();
+    let mut linter = Linter::new(reader).with_rule(&mut rule);
 
-    for checked in Linter::new(reader).with_rule(&mut rule) {
+    for checked in linter.by_ref() {
         let checked = checked.map_err(|source| Error::Warc {
             path: path.to_owned(),
             source,
@@ -151,12 +154,23 @@ fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintRep
         }
     }
 
+    let records = linter.position();
+    drop(linter);
+
     if let Some(error) = rule.error {
         return Err(error);
     }
 
+    let failed_core_records = findings
+        .iter()
+        .filter(|finding| !matches!(&finding.violation, Violation::Custom(_)))
+        .filter_map(|finding| finding.subject.as_ref().map(|subject| subject.index))
+        .collect::<HashSet<_>>()
+        .len();
+
     Ok(LintReport {
         findings,
+        core_lints_passed: records - failed_core_records,
         pagination: rule.analysis.pagination,
         roots: rule.analysis.roots,
         known_probes: rule.analysis.known_probes,

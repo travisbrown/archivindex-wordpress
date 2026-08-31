@@ -84,6 +84,7 @@ fn combine_wp_archives(options: &CombineOptions, quiet: bool) -> Result<CommandO
 /// Validate the capture graph and collection pagination protocol of an archive WARC.
 fn lint_wp_archive(options: &LintOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let report = lint_archive(&options.warc)?;
+    log::info!("core lints passed: {}", report.core_lints_passed);
     for finding in &report.findings {
         let subject = finding.subject.as_ref().map_or_else(
             || "the file".to_owned(),
@@ -1888,6 +1889,12 @@ mod tests {
 
     fn assert_archive_lint(warc: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let lint = lint_archive(warc)?;
+        let records = WarcReader::from_path(warc)?
+            .iter_records::<NoExtension>()
+            .records()
+            .collect::<Result<Vec<_>, _>>()?
+            .len();
+        assert_eq!(lint.core_lints_passed, records);
         assert_eq!(
             (lint.roots, lint.known_probes, lint.custom_probes),
             (8, 8, 2)
