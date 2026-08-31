@@ -47,7 +47,9 @@ pub enum DiscussionStatus {
 #[serde(rename_all = "snake_case")]
 pub enum PostFormat {
     Aside,
+    Audio,
     Standard,
+    Video,
 }
 
 /// Broad attachment category reported by the media endpoint.
@@ -91,6 +93,47 @@ pub enum CategoryTaxonomy {
 #[serde(rename_all = "snake_case")]
 pub enum TagTaxonomy {
     PostTag,
+}
+
+/// A GMT offset represented as either a JSON number or a numeric string.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum GmtOffset {
+    Number(f64),
+    String(String),
+}
+
+/// Author metadata added by Ultimate Addons for Gutenberg.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UagbAuthorInfo {
+    pub display_name: String,
+    pub author_link: String,
+}
+
+/// `VideoPress` metadata attached to media resources by Jetpack.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JetpackVideoPress {
+    pub title: String,
+    pub description: String,
+    pub caption: String,
+    pub guid: (),
+    pub rating: (),
+    pub allow_download: u64,
+    pub display_embed: u64,
+    pub privacy_setting: u64,
+    pub needs_playback_token: bool,
+    pub is_private: bool,
+    pub private_enabled_for_site: bool,
+}
+
+/// Elementor introduction state represented as an empty marker or named flags.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ElementorIntroduction {
+    Marker(String),
+    Flags(BTreeMap<String, bool>),
 }
 
 /// Link relations included in `WordPress` REST API resources.
@@ -196,8 +239,14 @@ pub struct Post {
     pub jetpack_related_posts: Option<Value>,
     pub jetpack_featured_media_url: Option<String>,
     pub jetpack_publicize_connections: Option<Value>,
+    pub jetpack_sharing_enabled: Option<bool>,
+    pub jetpack_shortlink: Option<String>,
     pub advanced_ads_groups: Option<Value>,
     pub gallery_data: Option<Value>,
+    pub uagb_author_info: Option<UagbAuthorInfo>,
+    pub uagb_comment_info: Option<u64>,
+    pub uagb_excerpt: Option<String>,
+    pub uagb_featured_image_src: Option<BTreeMap<String, bool>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -231,6 +280,12 @@ pub struct Page {
     pub class_list: Option<Vec<String>>,
     pub yoast_head: Option<String>,
     pub yoast_head_json: Option<Value>,
+    pub jetpack_sharing_enabled: Option<bool>,
+    pub jetpack_shortlink: Option<String>,
+    pub uagb_author_info: Option<UagbAuthorInfo>,
+    pub uagb_comment_info: Option<u64>,
+    pub uagb_excerpt: Option<String>,
+    pub uagb_featured_image_src: Option<BTreeMap<String, bool>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -289,6 +344,10 @@ pub struct User {
     pub woocommerce_meta: Option<Value>,
     pub yoast_head: Option<String>,
     pub yoast_head_json: Option<Value>,
+    pub amp_dev_tools_enabled: Option<bool>,
+    pub amp_review_panel_dismissed_for_template_mode: Option<String>,
+    pub elementor_introduction: Option<ElementorIntroduction>,
+    pub user_switching_url: Option<()>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -322,13 +381,40 @@ pub enum HasArchive {
     Slug(String),
 }
 
-/// Authentication methods advertised by the REST API root.
+/// A template lock represented as a flag or a named lock mode.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum TemplateLock {
+    Enabled(bool),
+    Mode(TemplateLockMode),
+}
+
+/// Named template-lock modes observed in post-type registries.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateLockMode {
+    All,
+}
+
+/// Authentication metadata advertised by the REST API root.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Authentication {
+    Methods(AuthenticationMethods),
+    Empty(Vec<NoAuthenticationMethod>),
+}
+
+/// Authentication methods advertised by newer REST API roots.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Authentication {
+pub struct AuthenticationMethods {
     #[serde(rename = "application-passwords")]
-    pub application_passwords: ApplicationPasswords,
+    pub application_passwords: Option<ApplicationPasswords>,
 }
+
+/// An uninhabited type that restricts legacy authentication arrays to empty arrays.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum NoAuthenticationMethod {}
 
 /// `WordPress` application-password authentication metadata.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -357,7 +443,7 @@ pub struct Type {
     pub rest_namespace: Option<String>,
     pub icon: Option<String>,
     pub template: Option<Value>,
-    pub template_lock: Option<bool>,
+    pub template_lock: Option<TemplateLock>,
     #[serde(rename = "_links")]
     pub links: Links,
     pub yoast_head: Option<String>,
@@ -372,7 +458,7 @@ pub struct ApiRoot {
     pub description: String,
     pub url: String,
     pub home: String,
-    pub gmt_offset: f64,
+    pub gmt_offset: GmtOffset,
     pub timezone_string: String,
     pub namespaces: Vec<String>,
     pub authentication: Authentication,
@@ -463,7 +549,11 @@ pub struct Media {
     pub filename: Option<String>,
     pub filesize: Option<u64>,
     #[serde(rename = "_links")]
-    pub links: Links,
+    pub links: Option<Links>,
+    pub jetpack_sharing_enabled: Option<bool>,
+    pub jetpack_shortlink: Option<String>,
+    pub jetpack_videopress: Option<JetpackVideoPress>,
+    pub jetpack_videopress_guid: Option<String>,
 }
 
 macro_rules! timestamp {
@@ -489,8 +579,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApiRoot, DiscussionStatus, ErrorResponse, Media, MediaType, Namespace, Post, PostFormat,
-        Taxonomy, Type,
+        ApiRoot, Authentication, DiscussionStatus, ErrorResponse, Media, MediaType, Namespace,
+        Post, PostFormat, Taxonomy, Type,
     };
 
     #[test]
@@ -547,9 +637,13 @@ mod tests {
                 .allow,
             ["GET"]
         );
+        let Authentication::Methods(authentication) = root.authentication else {
+            panic!("expected authentication methods");
+        };
         assert_eq!(
-            root.authentication
+            authentication
                 .application_passwords
+                .expect("application-password authentication")
                 .endpoints
                 .authorization,
             "https://example.com/wp-admin/authorize-application.php"

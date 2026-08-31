@@ -65,7 +65,7 @@ fn run(opts: Opts) -> Result<CommandOutcome, Error> {
     }
 }
 
-/// Combine a site's archive and resume-run segments into one gzip-compressed WARC.
+/// Combine a site's archive and resume-run segments into one WARC.
 fn combine_wp_archives(options: &CombineOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let summary = combine_archives(options)?;
     if !quiet {
@@ -1524,7 +1524,7 @@ enum Command {
     /// Check that every advertised comments page has a qualifying response or revisit record.
     #[clap(name = "check-comments")]
     Check(CheckCommentsOptions),
-    /// Combine a site's archive and resume-run segments into one gzip-compressed WARC.
+    /// Combine a site's archive and resume-run segments into one WARC.
     #[clap(name = "combine")]
     Combine(CombineOptions),
     /// Capture pages missing from a comments WARC into a new WARC.
@@ -1705,8 +1705,10 @@ mod tests {
     use archivindex_archiver::session::{Capture, Driver, Request};
     use archivindex_cli_support::{CommandOutcome, load_config};
     use archivindex_test_support::http::{dead_port, response, serve_with};
+    use archivindex_test_support::warc::render;
     use archivindex_warc::io::read::WarcReader;
     use archivindex_warc::io::write::WarcWriter;
+    use archivindex_warc::parse::raw;
     use archivindex_warc::record::extension::NoExtension;
     use archivindex_warc::record::{FieldsBlock, Record};
     use archivindex_wordpress_scraper::CommentDriver;
@@ -2103,6 +2105,114 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn combine_writes_plain_warc_and_consolidates_warcinfo()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const FIRST_ID: &str = "<urn:uuid:aaaaaaaa-0000-4000-8000-000000000000>";
+        const LATER_ID: &str = "<urn:uuid:bbbbbbbb-0000-4000-8000-000000000000>";
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("archives");
+        std::fs::create_dir(&input)?;
+
+        let mut first = render(
+            &[
+                ("WARC-Type", "warcinfo"),
+                ("WARC-Record-ID", FIRST_ID),
+                ("WARC-Date", "2026-08-20T00:00:00Z"),
+                ("WARC-Filename", "example.com-100.warc"),
+                ("Content-Type", "application/warc-fields"),
+            ],
+            "software: test/1.0\r\n",
+        );
+        first.extend_from_slice(&render(
+            &[
+                ("WARC-Type", "metadata"),
+                (
+                    "WARC-Record-ID",
+                    "<urn:uuid:cccccccc-0000-4000-8000-000000000000>",
+                ),
+                ("WARC-Date", "2026-08-20T00:00:01Z"),
+                ("WARC-Concurrent-To", LATER_ID),
+            ],
+            "via: https://example.com/\r\n",
+        ));
+        std::fs::write(input.join("example.com-100.warc"), first)?;
+
+        let mut later = render(
+            &[
+                ("WARC-Type", "warcinfo"),
+                ("WARC-Record-ID", LATER_ID),
+                ("WARC-Date", "2026-08-20T00:00:02Z"),
+                ("WARC-Filename", "example.com-200.warc"),
+                ("Content-Type", "application/warc-fields"),
+            ],
+            "software: test/2.0\r\n",
+        );
+        later.extend_from_slice(&render(
+            &[
+                ("WARC-Type", "metadata"),
+                (
+                    "WARC-Record-ID",
+                    "<urn:uuid:dddddddd-0000-4000-8000-000000000000>",
+                ),
+                ("WARC-Date", "2026-08-20T00:00:03Z"),
+                ("WARC-Warcinfo-ID", LATER_ID),
+                ("WARC-Refers-To", LATER_ID),
+                ("WARC-Segment-Origin-ID", LATER_ID),
+            ],
+            "via: https://example.com/\r\n",
+        ));
+        std::fs::write(input.join("example.com-200.warc"), later)?;
+
+        let output = directory.path().join("combined.warc");
+        let summary = combine_archives(&CombineOptions {
+            input,
+            domain: "example.com".to_owned(),
+            output: output.clone(),
+        })?;
+
+        assert_eq!((summary.files, summary.records), (2, 3));
+        assert_eq!(&std::fs::read(&output)?[..5], b"WARC/");
+        let records = WarcReader::from_path(&output)?
+            .iter_raw_records()
+            .records()
+            .collect::<Result<Vec<raw::Record>, _>>()?;
+        assert_eq!(records.len(), 3);
+        assert_eq!(trimmed_header(&records[0], "WARC-Type"), Some("warcinfo"));
+        assert_eq!(
+            trimmed_header(&records[0], "WARC-Filename"),
+            Some("combined.warc")
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| trimmed_header(record, "WARC-Type") == Some("warcinfo"))
+                .count(),
+            1
+        );
+        for (record, fields) in [
+            (&records[1], &["WARC-Concurrent-To"][..]),
+            (
+                &records[2],
+                &[
+                    "WARC-Warcinfo-ID",
+                    "WARC-Refers-To",
+                    "WARC-Segment-Origin-ID",
+                ][..],
+            ),
+        ] {
+            for field in fields {
+                assert_eq!(trimmed_header(record, field), Some(FIRST_ID));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn trimmed_header<'a>(record: &'a raw::Record, name: &str) -> Option<&'a str> {
+        std::str::from_utf8(record.header.get(name)?.trim_ascii()).ok()
     }
 
     #[test]
