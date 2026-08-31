@@ -70,7 +70,7 @@ dependencies = [
 [[package]]
 name = "archivindex-archiver"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#326e26916646edd438423bfcf53a61ce9c561f53"
+source = "git+https://github.com/travisbrown/archivindex-warc#ea2d78936805846ed17ad9b26bfbdf44fdfbdd7d"
 dependencies = [
  "archivindex-warc",
  "archivindex-warc-revisit-index",
@@ -116,7 +116,7 @@ dependencies = [
 [[package]]
 name = "archivindex-warc"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#326e26916646edd438423bfcf53a61ce9c561f53"
+source = "git+https://github.com/travisbrown/archivindex-warc#ea2d78936805846ed17ad9b26bfbdf44fdfbdd7d"
 dependencies = [
  "archivindex-warc-digest",
  "chrono",
@@ -134,7 +134,7 @@ dependencies = [
 [[package]]
 name = "archivindex-warc-digest"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#326e26916646edd438423bfcf53a61ce9c561f53"
+source = "git+https://github.com/travisbrown/archivindex-warc#ea2d78936805846ed17ad9b26bfbdf44fdfbdd7d"
 dependencies = [
  "data-encoding",
  "md-5",
@@ -145,9 +145,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "archivindex-warc-ops"
+version = "0.1.0"
+source = "git+https://github.com/travisbrown/archivindex-warc#ea2d78936805846ed17ad9b26bfbdf44fdfbdd7d"
+dependencies = [
+ "archivindex-warc",
+ "flate2",
+ "fluent-uri",
+ "log",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "archivindex-warc-revisit-index"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#326e26916646edd438423bfcf53a61ce9c561f53"
+source = "git+https://github.com/travisbrown/archivindex-warc#ea2d78936805846ed17ad9b26bfbdf44fdfbdd7d"
 dependencies = [
  "archivindex-warc",
  "fluent-uri",
@@ -170,6 +184,7 @@ version = "0.1.0"
 dependencies = [
  "archivindex-archiver",
  "archivindex-warc",
+ "archivindex-warc-ops",
  "archivindex-wordpress-model",
  "chrono",
  "flate2",
@@ -190,6 +205,7 @@ dependencies = [
  "archivindex-cli-support",
  "archivindex-test-support",
  "archivindex-warc",
+ "archivindex-warc-ops",
  "archivindex-wordpress-scraper",
  "chrono",
  "clap",

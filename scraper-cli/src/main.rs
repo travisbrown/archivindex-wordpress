@@ -85,9 +85,13 @@ fn combine_wp_archives(options: &CombineOptions, quiet: bool) -> Result<CommandO
 fn lint_wp_archive(options: &LintOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let report = lint_archive(&options.warc)?;
     for finding in &report.findings {
-        match finding.severity {
-            Severity::Error => log::error!("{}", finding.message),
-            Severity::Warning => log::warn!("{}", finding.message),
+        let subject = finding.subject.as_ref().map_or_else(
+            || "the file".to_owned(),
+            |subject| format!("record {}", subject.index),
+        );
+        match finding.violation.severity() {
+            Severity::Error => log::error!("{subject}: {}", finding.violation),
+            Severity::Warning => log::warn!("{subject}: {}", finding.violation),
         }
     }
 
@@ -1882,7 +1886,7 @@ mod tests {
     /// A metadata record's target URL and `via`.
     type MetadataVia = (String, Option<String>);
 
-    fn assert_archive_lint(warc: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fn assert_archive_lint(warc: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let lint = lint_archive(warc)?;
         assert_eq!(
             (lint.roots, lint.known_probes, lint.custom_probes),
@@ -1893,7 +1897,7 @@ mod tests {
         assert!(
             lint.findings
                 .iter()
-                .all(|finding| finding.severity == Severity::Warning)
+                .all(|finding| finding.violation.severity() == Severity::Warning)
         );
         assert_eq!(
             lint.pagination
@@ -1911,10 +1915,11 @@ mod tests {
             ]
         );
 
-        let gzip = output.join("site-archive.warc.gz");
-        let mut encoder = GzEncoder::new(std::fs::File::create(&gzip)?, Compression::default());
-        encoder.write_all(&std::fs::read(warc)?)?;
-        encoder.finish()?;
+        // Compressing gives each record a gzip member of its own and names the output in the
+        // warcinfo record, so the compressed archive is held to the same rules and reports the
+        // same findings.
+        let gzip = warc.with_extension("warc.gz");
+        archivindex_warc_ops::compress::compress_path(warc, 6, &gzip)?;
         assert_eq!(lint_archive(gzip)?, lint);
         Ok(())
     }
@@ -2846,7 +2851,10 @@ mod tests {
         let (port, server) = serve_site(22)?;
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("archives");
-        let options = archive_options(port, &output, "site-archive");
+        // The collection identifier a session names itself by, which the standard rules hold the
+        // file and its request hosts to.
+        let session = format!("127.0.0.1-{port}-1787184000");
+        let options = archive_options(port, &output, &session);
         let root = format!("http://127.0.0.1:{port}/");
         let page = |endpoint: &str, page: usize| {
             format!(
@@ -2886,7 +2894,7 @@ mod tests {
         );
         assert_eq!(server.join().expect("the local server"), expected);
 
-        let warc = output.join("site-archive.warc");
+        let warc = output.join(format!("{session}.warc"));
         assert!(std::fs::read(&warc)?.starts_with(b"WARC/"));
         let resume = inspect_archive(&warc)?;
         assert_eq!(resume.checkpoint, Checkpoint::Finished);
@@ -2926,7 +2934,7 @@ mod tests {
             ]
         );
 
-        assert_archive_lint(&warc, &output)?;
+        assert_archive_lint(&warc)?;
 
         Ok(())
     }

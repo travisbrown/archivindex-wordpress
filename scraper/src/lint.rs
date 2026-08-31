@@ -5,32 +5,16 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use archivindex_warc::io::read::WarcReader;
-use archivindex_warc::record::extension::NoExtension;
 use archivindex_warc::record::header::{RevisitHeader, RevisitProfile};
 use archivindex_warc::record::{FieldsBlock, Record, http, payload};
+use archivindex_warc_ops::lint::{Findings, Linter, Rule};
 use serde_json::Value;
 use url::Url;
 
 use crate::archive::{Site, SiteError};
 use crate::endpoint::{Collection, Endpoint, EndpointType, ROOT_ENDPOINTS, Registry};
 
-/// The severity of one archive lint finding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Severity {
-    /// A violation of the capture or pagination protocol.
-    Error,
-    /// A missing or incorrect advisory HTTP pagination link.
-    Warning,
-}
-
-/// One problem found in a collection archive.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Finding {
-    /// Whether the finding is an error or warning.
-    pub severity: Severity,
-    /// Human-readable description of the problem.
-    pub message: String,
-}
+pub use archivindex_warc_ops::lint::{Custom, Finding, Severity};
 
 /// Counts advertised for one successfully probed and paginated endpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,7 +30,8 @@ pub struct PaginationSummary {
 /// Results of linting one `WordPress` collection archive.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LintReport {
-    /// Problems in capture order, followed by cross-capture protocol problems.
+    /// The findings of the pass: those of the standard rules and those of the rules below, in
+    /// the order the pass reported them.
     pub findings: Vec<Finding>,
     /// Successfully probed endpoints in probe order, with their advertised counts.
     pub pagination: Vec<PaginationSummary>,
@@ -70,7 +55,7 @@ impl LintReport {
     pub fn error_count(&self) -> usize {
         self.findings
             .iter()
-            .filter(|finding| finding.severity == Severity::Error)
+            .filter(|finding| finding.violation.severity() == Severity::Error)
             .count()
     }
 
@@ -79,7 +64,7 @@ impl LintReport {
     pub fn warning_count(&self) -> usize {
         self.findings
             .iter()
-            .filter(|finding| finding.severity == Severity::Warning)
+            .filter(|finding| finding.violation.severity() == Severity::Warning)
             .count()
     }
 }
@@ -121,8 +106,10 @@ pub enum Error {
 
 /// Lint a plain or gzip-compressed `WordPress` collection WARC.
 ///
-/// The archive must begin with all API roots and known probes, followed by registry-advertised
-/// custom probes. Every successful probe must have one correctly linked pagination traversal.
+/// One pass checks the file against the rules of [`archivindex_warc_ops::lint`] and the
+/// `WordPress` rules below. The archive must begin with all API roots and known probes, followed
+/// by registry-advertised custom probes. Every successful probe must have one correctly linked
+/// pagination traversal.
 ///
 /// # Errors
 ///
@@ -147,6 +134,47 @@ pub fn lint_archive(path: impl AsRef<Path>) -> Result<LintReport, Error> {
         })?;
         lint_reader(reader, path)
     }
+}
+
+/// Run the standard rules and the `WordPress` rules over `reader` in one pass.
+fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintReport, Error> {
+    let mut rule = WordPressRules::new(path);
+    let mut findings = Vec::new();
+
+    for checked in Linter::new(reader).with_rule(&mut rule) {
+        let checked = checked.map_err(|source| Error::Warc {
+            path: path.to_owned(),
+            source,
+        })?;
+        if let Err(finding) = checked {
+            findings.push(*finding);
+        }
+    }
+
+    if let Some(error) = rule.error {
+        return Err(error);
+    }
+
+    Ok(LintReport {
+        findings,
+        pagination: rule.analysis.pagination,
+        roots: rule.analysis.roots,
+        known_probes: rule.analysis.known_probes,
+        custom_probes: rule.analysis.custom_probes,
+    })
+}
+
+/// What the whole-file analysis gathers: its findings, and the summary the report carries.
+///
+/// The findings are held until the pass settles the end of the file, since the analysis reads
+/// captures the whole file has to have been read to relate.
+#[derive(Debug, Default)]
+struct Analysis {
+    findings: Vec<Custom>,
+    pagination: Vec<PaginationSummary>,
+    roots: usize,
+    known_probes: usize,
+    custom_probes: usize,
 }
 
 #[derive(Debug)]
@@ -212,8 +240,8 @@ struct PageCapture {
     valid_query: bool,
 }
 
-fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintReport, Error> {
-    let (groups, mut report) = collect_groups(reader, path)?;
+/// Relate the captures the file holds, once every record has been read.
+fn analyse(groups: &[CaptureGroup], path: &Path, report: &mut Analysis) -> Result<(), Error> {
     let site = groups
         .iter()
         .find_map(|group| site_from_request(&group.url))
@@ -221,24 +249,29 @@ fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintRep
         .ok_or_else(|| Error::NoWordPressRequests(path.to_owned()))?;
     let mut checked_shapes = HashSet::new();
 
-    let customs = discover_customs(&groups, &site, &mut report);
+    let customs = discover_customs(groups, &site, report);
     let expected_initial = expected_initial(&site, &customs);
 
     let mut previous = None;
     let mut probes = Vec::new();
     for (position, (url, collection)) in expected_initial.iter().enumerate() {
-        let candidates = initial_capture_candidates(&groups, url);
+        let candidates = initial_capture_candidates(groups, url);
         let group = candidates.first().copied();
         let label = collection.as_ref().map_or_else(
             || format!("initial root {url}"),
             |collection| format!("{} probe", collection.name()),
         );
         if candidates.is_empty() {
-            error(&mut report, format!("missing required {label}"));
+            error(
+                report,
+                "missing_required_capture",
+                format!("missing required {label}"),
+            );
         } else {
             if candidates.len() > 1 {
                 error(
-                    &mut report,
+                    report,
+                    "repeated_initial_capture",
                     format!("{label} is captured {} times", candidates.len()),
                 );
             }
@@ -246,18 +279,19 @@ fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintRep
                 && group.is_some_and(|group| group < previous)
             {
                 error(
-                    &mut report,
+                    report,
+                    "initial_capture_out_of_order",
                     format!("{label} is out of initial capture order"),
                 );
             }
             if let Some(group) = group {
                 previous = Some(group);
-                check_capture_shape(&groups, group, &mut checked_shapes, &mut report);
+                check_capture_shape(groups, group, &mut checked_shapes, report);
                 let expected_via = collection
                     .as_ref()
                     .and_then(Collection::registry)
                     .map(|registry| format!("{}{}", site.root(), registry.path()));
-                check_via(&groups[group], expected_via.as_deref(), &label, &mut report);
+                check_via(&groups[group], expected_via.as_deref(), &label, report);
             }
             if position < ROOT_ENDPOINTS.len() {
                 report.roots += 1;
@@ -276,7 +310,8 @@ fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintRep
                 .and_then(|metadata| numeric_header(metadata, "x-wp-total"));
             if status.is_some_and(is_success) && items.is_none() {
                 error(
-                    &mut report,
+                    report,
+                    "missing_total_items",
                     format!(
                         "successful {} probe has missing or invalid X-WP-Total",
                         collection.name()
@@ -286,7 +321,7 @@ fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintRep
             if let (Some(group), Some(metadata)) = (group, response.as_ref())
                 && is_success(metadata.status)
             {
-                check_probe_response(&groups, group, metadata, collection.name(), &mut report);
+                check_probe_response(groups, group, metadata, collection.name(), report);
             }
             probes.push(Probe {
                 collection: collection.clone(),
@@ -297,9 +332,9 @@ fn lint_reader<R: BufRead>(reader: WarcReader<R>, path: &Path) -> Result<LintRep
         }
     }
 
-    check_unadvertised_custom_probes(&groups, &site, &customs, &mut report);
-    lint_pagination(&groups, &probes, &mut checked_shapes, &mut report);
-    Ok(report)
+    check_unadvertised_custom_probes(groups, &site, &customs, report);
+    lint_pagination(groups, &probes, &mut checked_shapes, report);
+    Ok(())
 }
 
 fn expected_initial(site: &Site, customs: &[Collection]) -> Vec<(String, Option<Collection>)> {
@@ -330,29 +365,156 @@ fn initial_capture_candidates(groups: &[CaptureGroup], url: &str) -> Vec<usize> 
         .collect()
 }
 
-fn collect_groups<R: BufRead>(
-    reader: WarcReader<R>,
-    path: &Path,
-) -> Result<(Vec<CaptureGroup>, LintReport), Error> {
-    let mut groups = Vec::<CaptureGroup>::new();
-    let mut requests = HashMap::<String, usize>::new();
-    let mut responses = HashMap::<String, usize>::new();
-    let mut report = LintReport::default();
+/// The rules a `WordPress` collection archive is held to, checked beside the standard rules.
+///
+/// The rules relate captures that only the whole file shows, so a pass collects the records as
+/// they go by and reports what it finds once the file ends. A record the pass cannot read is
+/// checked against no rule, and the capture it belonged to is reported incomplete.
+pub struct WordPressRules {
+    /// The file being read, named by the errors that end the pass.
+    path: PathBuf,
+    /// One entry per request record, in the order the file holds them.
+    groups: Vec<CaptureGroup>,
+    /// Where the group of each request record's identifier is.
+    requests: HashMap<String, usize>,
+    /// Where the group of each response or revisit record's identifier is.
+    responses: HashMap<String, usize>,
+    /// What the whole-file analysis found.
+    analysis: Analysis,
+    /// Why the archive could not be analysed, if it could not be.
+    error: Option<Error>,
+}
 
-    for record in reader.iter_records::<NoExtension>().records() {
-        let record = record.map_err(|source| Error::Warc {
-            path: path.to_owned(),
-            source,
-        })?;
+impl WordPressRules {
+    /// Hold the archive at `path` to the `WordPress` capture and pagination rules.
+    #[must_use]
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            groups: Vec::new(),
+            requests: HashMap::new(),
+            responses: HashMap::new(),
+            analysis: Analysis::default(),
+            error: None,
+        }
+    }
+
+    /// Note a `revisit` record standing in for the response of a capture.
+    fn collect_revisit(
+        &mut self,
+        index: usize,
+        record: &Record,
+        header: &RevisitHeader,
+        body: &[u8],
+        findings: &mut Findings<'_>,
+    ) {
+        let request = header
+            .concurrent_to
+            .iter()
+            .find_map(|record_id| self.requests.get(record_id.as_str()).copied());
+        let original = header
+            .refers_to
+            .as_ref()
+            .and_then(|record_id| self.responses.get(record_id.as_str()).copied());
+        let profile = match header.profile {
+            RevisitProfile::IdenticalPayloadDigest(_) => {
+                StoredRevisitProfile::IdenticalPayloadDigest
+            }
+            RevisitProfile::ServerNotModified(_) => StoredRevisitProfile::ServerNotModified,
+            RevisitProfile::Other(_) => StoredRevisitProfile::Other,
+        };
+        let identified_json = header
+            .payload
+            .identified_payload_type
+            .as_ref()
+            .is_some_and(|media_type| media_type.is("application", "json"));
+        self.attach_response(
+            index,
+            record,
+            header.target_uri.to_string(),
+            request,
+            header
+                .core
+                .truncated
+                .as_ref()
+                .map(|reason| reason.as_str().to_owned()),
+            Some(StoredRevisit {
+                profile,
+                original,
+                identified_json,
+            }),
+            body.to_vec(),
+            findings,
+        );
+    }
+
+    /// Attach a response or revisit record to the capture its request opened.
+    #[allow(clippy::too_many_arguments)]
+    fn attach_response(
+        &mut self,
+        index: usize,
+        record: &Record,
+        url: String,
+        request: Option<usize>,
+        truncation: Option<String>,
+        revisit: Option<StoredRevisit>,
+        body: Vec<u8>,
+        findings: &mut Findings<'_>,
+    ) {
+        let record_id = &record.core().record_id;
+        let Some(group) = request else {
+            findings.fault(
+                index,
+                record_id,
+                Custom::error(
+                    "unlinked_response_record",
+                    format!("response or revisit record {record_id} has no linked request"),
+                ),
+            );
+            return;
+        };
+        if self.groups[group].response.is_some() {
+            findings.fault(
+                index,
+                record_id,
+                Custom::error(
+                    "duplicate_capture_response",
+                    format!(
+                        "capture of {} has duplicate responses",
+                        self.groups[group].url
+                    ),
+                ),
+            );
+            return;
+        }
+        self.responses.insert(record_id.to_string(), group);
+        self.groups[group].response = Some(StoredResponse {
+            url,
+            body,
+            truncation,
+            revisit,
+        });
+    }
+}
+
+impl Rule for WordPressRules {
+    fn check(&mut self, index: usize, record: &Record, findings: &mut Findings<'_>) {
         match record {
             Record::Request { header, .. } => {
-                let id = header.core.record_id.into_string();
-                let index = groups.len();
-                if requests.insert(id.clone(), index).is_some() {
-                    error(&mut report, format!("duplicate request record ID {id}"));
+                let record_id = &header.core.record_id;
+                let group = self.groups.len();
+                if self.requests.insert(record_id.to_string(), group).is_some() {
+                    findings.fault(
+                        index,
+                        record_id,
+                        Custom::error(
+                            "duplicate_request_record_id",
+                            format!("duplicate request record ID {record_id}"),
+                        ),
+                    );
                 }
-                groups.push(CaptureGroup {
-                    url: header.target_uri.into_string(),
+                self.groups.push(CaptureGroup {
+                    url: header.target_uri.to_string(),
                     response: None,
                     metadata: None,
                 });
@@ -361,13 +523,11 @@ fn collect_groups<R: BufRead>(
                 let request = header
                     .concurrent_to
                     .iter()
-                    .find_map(|record_id| requests.get(record_id.as_str()).copied());
-                attach_response(
-                    &mut groups,
-                    &mut responses,
-                    &mut report,
-                    header.core.record_id.into_string(),
-                    header.target_uri.into_string(),
+                    .find_map(|record_id| self.requests.get(record_id.as_str()).copied());
+                self.attach_response(
+                    index,
+                    record,
+                    header.target_uri.to_string(),
                     request,
                     header
                         .core
@@ -375,43 +535,55 @@ fn collect_groups<R: BufRead>(
                         .as_ref()
                         .map(|reason| reason.as_str().to_owned()),
                     None,
-                    body,
+                    body.clone(),
+                    findings,
                 );
             }
-            Record::Revisit { header, body } => collect_revisit(
-                header,
-                body,
-                &requests,
-                &mut responses,
-                &mut groups,
-                &mut report,
-            ),
+            Record::Revisit { header, body } => {
+                self.collect_revisit(index, record, header, body, findings);
+            }
             Record::Metadata { header, body } => {
-                let id = header.core.record_id.into_string();
-                let Some(index) = header
+                let record_id = &header.core.record_id;
+                let Some(group) = header
                     .concurrent_to
                     .iter()
-                    .find_map(|record_id| responses.get(record_id.as_str()).copied())
+                    .find_map(|record_id| self.responses.get(record_id.as_str()).copied())
                 else {
-                    error(
-                        &mut report,
-                        format!("metadata record {id} has no linked response or revisit"),
+                    findings.fault(
+                        index,
+                        record_id,
+                        Custom::error(
+                            "unlinked_metadata_record",
+                            format!(
+                                "metadata record {record_id} has no linked response or revisit"
+                            ),
+                        ),
                     );
-                    continue;
+                    return;
                 };
-                if groups[index].metadata.is_some() {
-                    error(
-                        &mut report,
-                        format!("capture of {} has duplicate metadata", groups[index].url),
+                if self.groups[group].metadata.is_some() {
+                    findings.fault(
+                        index,
+                        record_id,
+                        Custom::error(
+                            "duplicate_capture_metadata",
+                            format!(
+                                "capture of {} has duplicate metadata",
+                                self.groups[group].url
+                            ),
+                        ),
                     );
-                    continue;
+                    return;
                 }
                 let (via, fields) = match body {
                     FieldsBlock::Fields(fields) => (fields.via().map(str::to_owned), true),
                     FieldsBlock::Raw(_) => (None, false),
                 };
-                let url = header.target_uri.map(|url| format!("{url}"));
-                groups[index].metadata = Some(StoredMetadata { url, via, fields });
+                self.groups[group].metadata = Some(StoredMetadata {
+                    url: header.target_uri.as_ref().map(|url| format!("{url}")),
+                    via,
+                    fields,
+                });
             }
             Record::Warcinfo { .. }
             | Record::Resource { .. }
@@ -420,89 +592,15 @@ fn collect_groups<R: BufRead>(
             | Record::Other { .. } => {}
         }
     }
-    Ok((groups, report))
-}
 
-fn collect_revisit(
-    header: RevisitHeader,
-    body: Vec<u8>,
-    requests: &HashMap<String, usize>,
-    responses: &mut HashMap<String, usize>,
-    groups: &mut [CaptureGroup],
-    report: &mut LintReport,
-) {
-    let request = header
-        .concurrent_to
-        .iter()
-        .find_map(|record_id| requests.get(record_id.as_str()).copied());
-    let original = header
-        .refers_to
-        .as_ref()
-        .and_then(|record_id| responses.get(record_id.as_str()).copied());
-    let profile = match header.profile {
-        RevisitProfile::IdenticalPayloadDigest(_) => StoredRevisitProfile::IdenticalPayloadDigest,
-        RevisitProfile::ServerNotModified(_) => StoredRevisitProfile::ServerNotModified,
-        RevisitProfile::Other(_) => StoredRevisitProfile::Other,
-    };
-    let identified_json = header
-        .payload
-        .identified_payload_type
-        .as_ref()
-        .is_some_and(|media_type| media_type.is("application", "json"));
-    attach_response(
-        groups,
-        responses,
-        report,
-        header.core.record_id.into_string(),
-        header.target_uri.into_string(),
-        request,
-        header
-            .core
-            .truncated
-            .as_ref()
-            .map(|reason| reason.as_str().to_owned()),
-        Some(StoredRevisit {
-            profile,
-            original,
-            identified_json,
-        }),
-        body,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn attach_response(
-    groups: &mut [CaptureGroup],
-    responses: &mut HashMap<String, usize>,
-    report: &mut LintReport,
-    id: String,
-    url: String,
-    request: Option<usize>,
-    truncation: Option<String>,
-    revisit: Option<StoredRevisit>,
-    body: Vec<u8>,
-) {
-    let Some(index) = request else {
-        error(
-            report,
-            format!("response or revisit record {id} has no linked request"),
-        );
-        return;
-    };
-    if groups[index].response.is_some() {
-        error(
-            report,
-            format!("capture of {} has duplicate responses", groups[index].url),
-        );
-        return;
+    fn finish(&mut self, findings: &mut Findings<'_>) {
+        if let Err(error) = analyse(&self.groups, &self.path, &mut self.analysis) {
+            self.error = Some(error);
+        }
+        for violation in self.analysis.findings.drain(..) {
+            findings.fault_file(violation);
+        }
     }
-    responses.insert(id, index);
-    groups[index].response = Some(StoredResponse {
-        url,
-        body,
-        truncation,
-        revisit,
-    });
 }
 
 fn site_from_request(request: &str) -> Option<Result<Site, Error>> {
@@ -525,7 +623,7 @@ fn site_from_request(request: &str) -> Option<Result<Site, Error>> {
 fn discover_customs(
     groups: &[CaptureGroup],
     site: &Site,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) -> Vec<Collection> {
     let mut custom = Vec::new();
     for registry in Registry::ALL {
@@ -550,6 +648,7 @@ fn discover_customs(
             Err(source) => {
                 error(
                     report,
+                    "unreadable_registry_payload",
                     format!("cannot read {url} response payload: {source}"),
                 );
                 continue;
@@ -560,6 +659,7 @@ fn discover_customs(
             Err(source) => {
                 error(
                     report,
+                    "unreadable_registry_response",
                     format!("unreadable {url} registry response: {source}"),
                 );
                 continue;
@@ -581,7 +681,7 @@ fn check_unadvertised_custom_probes(
     groups: &[CaptureGroup],
     site: &Site,
     custom: &[Collection],
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     let known = Endpoint::ALL.map(Endpoint::name);
     let prefix = format!("{}wp-json/wp/v2/", site.root());
@@ -607,6 +707,7 @@ fn check_unadvertised_custom_probes(
         {
             error(
                 report,
+                "unadvertised_custom_probe",
                 format!("custom endpoint probe {name:?} was not advertised by a registry"),
             );
         }
@@ -617,7 +718,7 @@ fn check_capture_shape(
     groups: &[CaptureGroup],
     index: usize,
     checked: &mut HashSet<usize>,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     if !checked.insert(index) {
         return;
@@ -626,6 +727,7 @@ fn check_capture_shape(
     let Some(response) = &group.response else {
         error(
             report,
+            "missing_capture_response",
             format!("capture of {} is missing a response or revisit", group.url),
         );
         return;
@@ -633,6 +735,7 @@ fn check_capture_shape(
     if response.url != group.url {
         error(
             report,
+            "capture_uri_mismatch",
             format!(
                 "capture request URI {} does not match response URI {}",
                 group.url, response.url
@@ -646,6 +749,7 @@ fn check_capture_shape(
     {
         error(
             report,
+            "truncated_capture_response",
             format!(
                 "capture of {} has a response truncated because of {reason}",
                 group.url
@@ -655,12 +759,14 @@ fn check_capture_shape(
     if http::ResponseMetadata::parse(&response.body).is_none() {
         error(
             report,
+            "invalid_http_response",
             format!("capture of {} has an invalid HTTP response", group.url),
         );
     }
     let Some(metadata) = &group.metadata else {
         error(
             report,
+            "missing_capture_metadata",
             format!("capture of {} is missing metadata", group.url),
         );
         return;
@@ -668,6 +774,7 @@ fn check_capture_shape(
     if metadata.url.as_deref() != Some(response.url.as_str()) {
         error(
             report,
+            "metadata_uri_mismatch",
             format!(
                 "capture response URI {} does not match metadata URI {}",
                 response.url,
@@ -678,6 +785,7 @@ fn check_capture_shape(
     if !metadata.fields {
         error(
             report,
+            "metadata_not_warc_fields",
             format!(
                 "capture of {} metadata is not application/warc-fields",
                 group.url
@@ -686,7 +794,7 @@ fn check_capture_shape(
     }
 }
 
-fn check_via(group: &CaptureGroup, expected: Option<&str>, label: &str, report: &mut LintReport) {
+fn check_via(group: &CaptureGroup, expected: Option<&str>, label: &str, report: &mut Analysis) {
     let actual = group
         .metadata
         .as_ref()
@@ -694,6 +802,7 @@ fn check_via(group: &CaptureGroup, expected: Option<&str>, label: &str, report: 
     if actual != expected {
         error(
             report,
+            "wrong_via",
             format!(
                 "{label} has via {}, expected {}",
                 display_optional(actual),
@@ -707,7 +816,7 @@ fn lint_pagination(
     groups: &[CaptureGroup],
     probes: &[Probe],
     checked_shapes: &mut HashSet<usize>,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     let (mut pages, encountered) = collect_page_captures(groups, probes, report);
 
@@ -730,6 +839,7 @@ fn lint_pagination(
     {
         error(
             report,
+            "pagination_out_of_probe_order",
             format!(
                 "pagination endpoints are out of probe order: found {}, expected {}",
                 encountered_unique.join(", "),
@@ -742,6 +852,7 @@ fn lint_pagination(
         if !seen.insert(name) {
             error(
                 report,
+                "interrupted_pagination_series",
                 format!("pagination series for {name} is interrupted by another endpoint"),
             );
         }
@@ -755,6 +866,7 @@ fn lint_pagination(
             if !captures.is_empty() {
                 error(
                     report,
+                    "unexpected_pagination_series",
                     format!(
                         "unsuccessful {name} probe has a pagination series of {} captures",
                         captures.len()
@@ -766,6 +878,7 @@ fn lint_pagination(
         if captures.is_empty() {
             error(
                 report,
+                "missing_pagination_series",
                 format!("successful {name} probe has no pagination series"),
             );
             report.pagination.push(PaginationSummary {
@@ -787,7 +900,7 @@ fn lint_pagination(
 fn collect_page_captures(
     groups: &[CaptureGroup],
     probes: &[Probe],
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) -> (BTreeMap<String, Vec<PageCapture>>, Vec<String>) {
     let mut pages = BTreeMap::<String, Vec<PageCapture>>::new();
     let mut cutoff = None;
@@ -809,6 +922,7 @@ fn collect_page_captures(
                 None => cutoff = Some(before),
                 Some(expected) if expected != &before => error(
                     report,
+                    "conflicting_before_cutoff",
                     format!(
                         "pagination request {} has a conflicting before cutoff",
                         group.url
@@ -869,7 +983,7 @@ fn lint_series(
     probe: &Probe,
     captures: &[PageCapture],
     checked_shapes: &mut HashSet<usize>,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) -> Option<usize> {
     let name = probe.collection.name();
     let split = captures
@@ -913,6 +1027,7 @@ fn lint_series(
         } else {
             error(
                 report,
+                "unnecessary_second_pass",
                 format!("{name} pagination series has an unnecessary second pass"),
             );
         }
@@ -929,7 +1044,7 @@ fn lint_pass(
     expected_total: Option<usize>,
     pass: &str,
     checked_shapes: &mut HashSet<usize>,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     for (position, capture) in captures.iter().enumerate() {
         let expected_via = if position == 0 {
@@ -954,6 +1069,7 @@ fn lint_pass(
     {
         error(
             report,
+            "wrong_pagination_length",
             format!(
                 "{name} {pass} pass has {} captures, expected {} for {total} advertised pages",
                 captures.len(),
@@ -972,13 +1088,14 @@ fn lint_page_capture(
     name: &str,
     pass: &str,
     checked_shapes: &mut HashSet<usize>,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     let group = &groups[capture.group];
     check_capture_shape(groups, capture.group, checked_shapes, report);
     if !capture.valid_query {
         error(
             report,
+            "malformed_pagination_uri",
             format!(
                 "{name} {pass} pagination URI has the wrong shape: {}",
                 group.url
@@ -989,6 +1106,7 @@ fn lint_page_capture(
     if capture.page != Some(expected_page) {
         error(
             report,
+            "pagination_page_out_of_order",
             format!(
                 "{name} {pass} pagination capture {} is page {}, expected page {expected_page}",
                 position + 1,
@@ -1011,6 +1129,7 @@ fn lint_page_capture(
     if !matches!(metadata.status, 200 | 304) {
         error(
             report,
+            "unexpected_page_status",
             format!(
                 "{name} {pass} page {expected_page} has unexpected HTTP status {}",
                 metadata.status
@@ -1021,6 +1140,7 @@ fn lint_page_capture(
     if advertised.is_none() {
         error(
             report,
+            "missing_total_pages",
             format!("{name} {pass} page {expected_page} has missing or invalid X-WP-TotalPages"),
         );
     }
@@ -1051,7 +1171,7 @@ fn check_json_array(
     name: &str,
     pass: &str,
     page: usize,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     if metadata.status != 200 {
         return;
@@ -1067,6 +1187,7 @@ fn check_json_array(
     if !valid {
         error(
             report,
+            "page_not_json_array",
             format!("{name} {pass} page {page} response is not a JSON array"),
         );
     }
@@ -1077,11 +1198,12 @@ fn check_probe_response(
     group: usize,
     metadata: &http::ResponseMetadata,
     name: &str,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     if numeric_header(metadata, "x-wp-totalpages").is_none() {
         error(
             report,
+            "missing_total_pages",
             format!("successful {name} probe has missing or invalid X-WP-TotalPages"),
         );
     }
@@ -1097,6 +1219,7 @@ fn check_probe_response(
         if !valid {
             error(
                 report,
+                "probe_not_json_array",
                 format!("successful {name} probe response is not a JSON array"),
             );
         }
@@ -1148,7 +1271,7 @@ fn check_header_links(
     total: Option<usize>,
     name: &str,
     pass: &str,
-    report: &mut LintReport,
+    report: &mut Analysis,
 ) {
     let Some(total) = total else {
         return;
@@ -1179,11 +1302,12 @@ fn check_header_links(
                 }
             });
         if attested {
-            warning_once(report, ATTEST_LINK_WARNING);
+            warning_once(report, "attested_pagination_link", ATTEST_LINK_WARNING);
         }
         if !found {
             warning(
                 report,
+                "missing_pagination_link",
                 format!(
                     "{name} {pass} page {page} has no expected {relation} Link to page {expected_page}"
                 ),
@@ -1300,27 +1424,21 @@ fn display_optional(value: Option<&str>) -> String {
     value.map_or_else(|| "no value".to_owned(), |value| format!("{value:?}"))
 }
 
-fn error(report: &mut LintReport, message: String) {
-    report.findings.push(Finding {
-        severity: Severity::Error,
-        message,
-    });
+fn error(report: &mut Analysis, rule: &'static str, message: String) {
+    report.findings.push(Custom::error(rule, message));
 }
 
-fn warning(report: &mut LintReport, message: String) {
-    report.findings.push(Finding {
-        severity: Severity::Warning,
-        message,
-    });
+fn warning(report: &mut Analysis, rule: &'static str, message: String) {
+    report.findings.push(Custom::warning(rule, message));
 }
 
-fn warning_once(report: &mut LintReport, message: &str) {
+fn warning_once(report: &mut Analysis, rule: &'static str, message: &str) {
     if !report
         .findings
         .iter()
-        .any(|finding| finding.severity == Severity::Warning && finding.message == message)
+        .any(|finding| finding.severity() == Severity::Warning && finding.message() == message)
     {
-        warning(report, message.to_owned());
+        warning(report, rule, message.to_owned());
     }
 }
 
@@ -1329,7 +1447,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        ATTEST_LINK_WARNING, CaptureGroup, LintReport, PageCapture, PageUriMatch, Probe,
+        ATTEST_LINK_WARNING, Analysis, CaptureGroup, PageCapture, PageUriMatch, Probe, Severity,
         StoredMetadata, StoredResponse, StoredRevisit, StoredRevisitProfile, expected_initial,
         initial_capture_candidates, is_server_challenge, lint_series, page_query, page_uri_match,
     };
@@ -1545,15 +1663,15 @@ mod tests {
             response.body = text.replace(">; rel=", "&attest=true>; rel=").into_bytes();
         }
         let captures = pages(&groups);
-        let mut report = LintReport::default();
+        let mut report = Analysis::default();
 
         assert_eq!(
             lint_series(&groups, &probe, &captures, &mut HashSet::new(), &mut report),
             Some(3)
         );
-        assert_eq!(report.error_count(), 0, "{:?}", report.findings);
-        assert_eq!(report.warning_count(), 1, "{:?}", report.findings);
-        assert_eq!(report.findings[0].message, ATTEST_LINK_WARNING);
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert_eq!(report.findings[0].severity(), Severity::Warning);
+        assert_eq!(report.findings[0].message(), ATTEST_LINK_WARNING);
     }
 
     #[test]
@@ -1562,20 +1680,20 @@ mod tests {
         let mut groups = vec![capture(1, &probe.url, 2)];
         groups.push(capture(2, &groups[0].url, 2));
         let captures = pages(&groups);
-        let mut report = LintReport::default();
+        let mut report = Analysis::default();
 
         assert_eq!(
             lint_series(&groups, &probe, &captures, &mut HashSet::new(), &mut report,),
             Some(2)
         );
-        assert!(report.is_clean(), "{:?}", report.findings);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
 
         let mut repeated_groups = vec![capture(1, &probe.url, 2)];
         repeated_groups.push(capture(2, &repeated_groups[0].url, 2));
         repeated_groups.push(revisit(1, &repeated_groups[1].url, 2, 0));
         repeated_groups.push(revisit(2, &repeated_groups[2].url, 2, 1));
         let repeated_captures = pages(&repeated_groups);
-        let mut legacy = LintReport::default();
+        let mut legacy = Analysis::default();
         lint_series(
             &repeated_groups,
             &probe,
@@ -1583,7 +1701,7 @@ mod tests {
             &mut HashSet::new(),
             &mut legacy,
         );
-        assert!(legacy.is_clean(), "{:?}", legacy.findings);
+        assert!(legacy.findings.is_empty(), "{:?}", legacy.findings);
     }
 
     #[test]
@@ -1592,18 +1710,18 @@ mod tests {
         probe.items = Some(0);
         let groups = vec![capture(1, &probe.url, 0)];
         let captures = pages(&groups);
-        let mut report = LintReport::default();
+        let mut report = Analysis::default();
 
         assert_eq!(
             lint_series(&groups, &probe, &captures, &mut HashSet::new(), &mut report,),
             Some(0)
         );
-        assert!(report.is_clean(), "{:?}", report.findings);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
 
         let mut groups = groups;
         groups.push(capture(1, &groups[0].url, 0));
         let captures = pages(&groups);
-        let mut repeated = LintReport::default();
+        let mut repeated = Analysis::default();
         lint_series(
             &groups,
             &probe,
@@ -1612,7 +1730,7 @@ mod tests {
             &mut repeated,
         );
         assert!(repeated.findings.iter().any(|finding| {
-            finding.message == "posts pagination series has an unnecessary second pass"
+            finding.message() == "posts pagination series has an unnecessary second pass"
         }));
     }
 }
