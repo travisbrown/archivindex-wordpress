@@ -1,0 +1,24 @@
+[package]
+name = "archivindex-wordpress-model"
+description = "Data models for the WordPress REST API"
+authors.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/crate/archivindex-wordpress-model/"
+keywords.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
