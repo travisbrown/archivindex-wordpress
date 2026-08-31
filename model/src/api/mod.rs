@@ -12,7 +12,7 @@ pub struct Rendered {
     pub protected: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Post {
     pub id: u64,
@@ -33,6 +33,7 @@ pub struct Post {
     pub excerpt: Rendered,
     #[serde(default)]
     pub guid: Rendered,
+    #[serde(default)]
     pub author: u64,
     #[serde(default)]
     pub featured_media: u64,
@@ -82,9 +83,13 @@ pub struct Post {
     pub jetpack_featured_media_url: Value,
     #[serde(default)]
     pub jetpack_publicize_connections: Value,
+    #[serde(default)]
+    pub advanced_ads_groups: Value,
+    #[serde(default)]
+    pub gallery_data: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
     pub id: u64,
@@ -132,7 +137,7 @@ pub struct Page {
     pub yoast_head_json: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Category {
     pub id: u64,
@@ -159,7 +164,7 @@ pub struct Category {
     pub yoast_head_json: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tag {
     pub id: u64,
@@ -184,7 +189,7 @@ pub struct Tag {
     pub yoast_head_json: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct User {
     pub id: u64,
@@ -216,7 +221,7 @@ pub struct User {
     pub yoast_head_json: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Comment {
     pub id: u64,
@@ -257,7 +262,7 @@ pub enum HasArchive {
     Slug(String),
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Type {
     pub name: String,
@@ -288,6 +293,136 @@ pub struct Type {
     pub yoast_head_json: Value,
 }
 
+/// The discovery document at the REST API root.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApiRoot {
+    pub name: String,
+    pub description: String,
+    pub url: String,
+    pub home: String,
+    pub gmt_offset: f64,
+    pub timezone_string: String,
+    pub namespaces: Vec<String>,
+    #[serde(default)]
+    pub authentication: Value,
+    #[serde(default)]
+    pub routes: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub site_logo: u64,
+    #[serde(default)]
+    pub site_icon: u64,
+    #[serde(default)]
+    pub site_icon_url: String,
+    #[serde(default)]
+    pub page_for_posts: u64,
+    #[serde(default)]
+    pub page_on_front: u64,
+    #[serde(default)]
+    pub show_on_front: String,
+    #[serde(default, rename = "_links")]
+    pub links: Value,
+}
+
+/// A REST API namespace discovery document.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Namespace {
+    pub namespace: String,
+    #[serde(default)]
+    pub routes: BTreeMap<String, Value>,
+    #[serde(default, rename = "_links")]
+    pub links: Value,
+}
+
+/// An error returned by the REST API.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorResponse {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub data: Value,
+}
+
+/// A taxonomy advertised by the `/wp/v2/taxonomies` registry.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Taxonomy {
+    pub name: String,
+    pub slug: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub hierarchical: bool,
+    #[serde(default)]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub rest_base: String,
+    #[serde(default)]
+    pub rest_namespace: String,
+    #[serde(default, rename = "_links")]
+    pub links: Value,
+}
+
+/// An attachment returned by the `/wp/v2/media` collection.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Media {
+    pub id: u64,
+    pub date: Option<NaiveDateTime>,
+    pub date_gmt: Option<NaiveDateTime>,
+    pub modified: Option<NaiveDateTime>,
+    pub modified_gmt: Option<NaiveDateTime>,
+    pub slug: String,
+    pub status: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub link: String,
+    #[serde(default)]
+    pub title: Rendered,
+    #[serde(default)]
+    pub guid: Rendered,
+    #[serde(default)]
+    pub author: u64,
+    #[serde(default)]
+    pub featured_media: u64,
+    #[serde(default)]
+    pub comment_status: String,
+    #[serde(default)]
+    pub ping_status: String,
+    #[serde(default)]
+    pub template: String,
+    #[serde(default)]
+    pub meta: Value,
+    #[serde(default)]
+    pub class_list: Value,
+    #[serde(default)]
+    pub acf: Value,
+    #[serde(default)]
+    pub description: Rendered,
+    #[serde(default)]
+    pub caption: Rendered,
+    #[serde(default)]
+    pub alt_text: String,
+    #[serde(default)]
+    pub media_type: String,
+    #[serde(default)]
+    pub mime_type: String,
+    #[serde(default)]
+    pub media_details: Value,
+    #[serde(default)]
+    pub post: Option<u64>,
+    #[serde(default)]
+    pub source_url: String,
+    #[serde(default)]
+    pub filename: String,
+    #[serde(default)]
+    pub filesize: Option<u64>,
+    #[serde(default, rename = "_links")]
+    pub links: Value,
+}
+
 macro_rules! timestamp {
     ($type:ty) => {
         impl $type {
@@ -302,3 +437,112 @@ macro_rules! timestamp {
 timestamp!(Post);
 timestamp!(Page);
 timestamp!(Comment);
+timestamp!(Media);
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{ApiRoot, ErrorResponse, Media, Namespace, Post, Taxonomy};
+
+    #[test]
+    fn api_discovery_documents_and_errors_parse() {
+        serde_json::from_value::<ApiRoot>(json!({
+            "name": "Example",
+            "description": "An example site",
+            "url": "https://example.com",
+            "home": "https://example.com",
+            "gmt_offset": -4,
+            "timezone_string": "America/New_York",
+            "namespaces": ["wp/v2"],
+            "authentication": {},
+            "routes": {},
+            "_links": {}
+        }))
+        .expect("an API root");
+        serde_json::from_value::<Namespace>(json!({
+            "namespace": "wp/v2",
+            "routes": {},
+            "_links": {}
+        }))
+        .expect("a namespace index");
+        serde_json::from_value::<ErrorResponse>(json!({
+            "code": "rest_cannot_access",
+            "message": "Sorry, you are not allowed to do that.",
+            "data": {"status": 401}
+        }))
+        .expect("an API error");
+    }
+
+    #[test]
+    fn taxonomy_registry_entries_parse() {
+        let taxonomy = serde_json::from_value::<Taxonomy>(json!({
+            "name": "Categories",
+            "slug": "category",
+            "description": "",
+            "hierarchical": true,
+            "types": ["post"],
+            "rest_base": "categories",
+            "rest_namespace": "wp/v2",
+            "_links": {}
+        }))
+        .expect("a taxonomy");
+
+        assert_eq!(taxonomy.types, ["post"]);
+    }
+
+    #[test]
+    fn media_attachments_parse() {
+        let media = serde_json::from_value::<Media>(json!({
+            "id": 42,
+            "date": "2026-08-28T17:57:06",
+            "date_gmt": "2026-08-28T21:57:06",
+            "modified": "2026-08-28T17:57:06",
+            "modified_gmt": "2026-08-28T21:57:06",
+            "slug": "example-image",
+            "status": "inherit",
+            "type": "attachment",
+            "link": "https://example.com/example-image/",
+            "title": {"rendered": "Example image"},
+            "guid": {"rendered": "https://example.com/example.png"},
+            "author": 1,
+            "description": {"rendered": ""},
+            "caption": {"rendered": ""},
+            "media_type": "image",
+            "mime_type": "image/png",
+            "media_details": {"width": 1000, "height": 523, "sizes": {}},
+            "post": null,
+            "source_url": "https://example.com/example.png",
+            "filesize": null,
+            "_links": {}
+        }))
+        .expect("a media attachment");
+
+        assert_eq!(
+            media.timestamp().expect("a timestamp").to_rfc3339(),
+            "2026-08-28T21:57:06+00:00"
+        );
+    }
+
+    #[test]
+    fn custom_post_types_parse_through_the_post_model() {
+        let post = serde_json::from_value::<Post>(json!({
+            "id": 7,
+            "date": "2026-08-28T17:57:06",
+            "date_gmt": "2026-08-28T21:57:06",
+            "modified": "2026-08-28T17:57:06",
+            "modified_gmt": "2026-08-28T21:57:06",
+            "slug": "gallery",
+            "status": "publish",
+            "type": "envira",
+            "link": "https://example.com/gallery/",
+            "title": {"rendered": "Gallery"},
+            "gallery_data": {"id": 7},
+            "acf": [],
+            "_links": {}
+        }))
+        .expect("a custom post type");
+
+        assert_eq!(post.author, 0);
+    }
+}
