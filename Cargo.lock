@@ -170,6 +170,7 @@ version = "0.1.0"
 dependencies = [
  "archivindex-archiver",
  "archivindex-warc",
+ "archivindex-wordpress-model",
  "chrono",
  "flate2",
  "proptest",

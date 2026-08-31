@@ -1928,7 +1928,9 @@ mod tests {
                 .query_pairs()
                 .find_map(|(name, value)| (name == "page").then(|| value.into_owned()))
                 .expect("a page parameter");
-            let body = format!(r#"[{{"id":{page},"date_gmt":"2026-08-20T00:00:0{page}"}}]"#);
+            let body = format!(
+                r#"[{{"id":{page},"post":1,"date":null,"date_gmt":"2026-08-20T00:00:0{page}","type":"comment"}}]"#
+            );
             let headers = [
                 ("content-type", "application/json"),
                 ("x-wp-total", "2"),

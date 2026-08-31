@@ -29,7 +29,8 @@ use std::collections::HashSet;
 
 use archivindex_archiver::Error;
 use archivindex_archiver::session::{Capture, Driver, Inspection, Request};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
+use archivindex_wordpress_model::api::Comment;
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde::Deserialize;
 use url::Url;
 
@@ -340,7 +341,7 @@ impl CommentDriver {
     /// Title a parsed comment batch by its ID and GMT date ranges.
     fn title(&self, comments: &[Comment]) -> Option<String> {
         let (first_id, last_id) = bounds(comments.iter().map(|comment| comment.id))?;
-        let (first_date, last_date) = bounds(comments.iter().filter_map(Comment::date))?;
+        let (first_date, last_date) = bounds(comments.iter().filter_map(Comment::timestamp))?;
 
         Some(format!(
             "{} comments {first_id}-{last_id} ({} to {})",
@@ -435,7 +436,7 @@ impl Driver for CommentDriver {
         let title = self.title(&comments);
         for comment in &comments {
             if self.seen_ids.insert(comment.id)
-                && let Some(date) = comment.date().map(|date| date.date_naive())
+                && let Some(date) = comment.timestamp().map(|date| date.date_naive())
             {
                 self.first_date = Some(self.first_date.map_or(date, |first| first.min(date)));
                 self.last_date = Some(self.last_date.map_or(date, |last| last.max(date)));
@@ -518,31 +519,10 @@ impl std::fmt::Display for CommentProgress {
     }
 }
 
-/// The fields used from one `WordPress` REST API v2 comment.
-#[derive(Deserialize)]
-struct Comment {
-    id: u64,
-    date_gmt: String,
-}
-
 /// The discriminator in a `WordPress` REST API error response.
 #[derive(Deserialize)]
 struct WordPressError {
     code: String,
-}
-
-impl Comment {
-    /// Parse the `WordPress` GMT timestamp, which is normally returned without a zone suffix.
-    fn date(&self) -> Option<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(&self.date_gmt)
-            .map(|date| date.with_timezone(&Utc))
-            .ok()
-            .or_else(|| {
-                NaiveDateTime::parse_from_str(&self.date_gmt, "%Y-%m-%dT%H:%M:%S")
-                    .map(|date| date.and_utc())
-                    .ok()
-            })
-    }
 }
 
 /// Whether Cloudflare's managed challenge answered the request.
@@ -642,6 +622,16 @@ mod tests {
             .expect("a test timestamp")
     }
 
+    fn comment(id: u64, date_gmt: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "post": 1,
+            "date": null,
+            "date_gmt": date_gmt,
+            "type": "comment"
+        })
+    }
+
     const EMPTY_PAGE: &[u8] = b"HTTP/1.1 200 OK\r\nX-WP-Total: 0\r\nX-WP-TotalPages: 1\r\n\r\n";
     const ONE_PAGE: &[u8] = b"HTTP/1.1 200 OK\r\nX-WP-Total: 100\r\nX-WP-TotalPages: 1\r\n\r\n";
     const TWO_PAGES: &[u8] = b"HTTP/1.1 200 OK\r\nX-WP-Total: 101\r\nX-WP-TotalPages: 2\r\n\r\n";
@@ -728,12 +718,13 @@ mod tests {
     fn inspection_titles_a_batch_and_advances_by_page() {
         let mut driver =
             CommentDriver::with_before("https://example.com", timestamp(BEFORE)).expect("a driver");
-        let payload = br#"[
-            {"id": 211416, "date_gmt": "2020-11-28T08:15:00"},
-            {"id": 211420, "date_gmt": "2020-11-30T12:30:00"}
-        ]"#;
+        let payload = serde_json::to_vec(&[
+            comment(211_416, "2020-11-28T08:15:00"),
+            comment(211_420, "2020-11-30T12:30:00"),
+        ])
+        .expect("valid JSON");
 
-        let inspection = driver.inspect(&capture(payload, TWO_PAGES));
+        let inspection = driver.inspect(&capture(&payload, TWO_PAGES));
 
         assert_eq!(
             inspection.title.as_deref(),
@@ -768,11 +759,10 @@ mod tests {
             CommentDriver::with_before("https://example.com", timestamp(BEFORE)).expect("a driver");
         let page_one = serde_json::to_vec(
             &(1..=100)
-                .map(|id| json!({"id": id, "date_gmt": "2020-11-30T12:30:00"}))
+                .map(|id| comment(id, "2020-11-30T12:30:00"))
                 .collect::<Vec<_>>(),
         )?;
-        let page_two =
-            serde_json::to_vec(&[json!({"id": 101, "date_gmt": "2020-11-30T12:30:00"})])?;
+        let page_two = serde_json::to_vec(&[comment(101, "2020-11-30T12:30:00")])?;
 
         let _ = driver.inspect(&capture(&page_one, TWO_PAGES));
         assert_eq!(driver.next(), Some(page_request(&driver, 2, None)));
@@ -791,12 +781,12 @@ mod tests {
             CommentDriver::with_before("https://example.com", timestamp(BEFORE)).expect("a driver");
         let original_page = serde_json::to_vec(
             &(1..=100)
-                .map(|id| json!({"id": id, "date_gmt": "2020-11-30T12:30:00"}))
+                .map(|id| comment(id, "2020-11-30T12:30:00"))
                 .collect::<Vec<_>>(),
         )?;
         let shifted_page = serde_json::to_vec(
             &(2..=101)
-                .map(|id| json!({"id": id, "date_gmt": "2020-11-30T12:30:00"}))
+                .map(|id| comment(id, "2020-11-30T12:30:00"))
                 .collect::<Vec<_>>(),
         )?;
 
@@ -847,11 +837,10 @@ mod tests {
             .second_sweep(true);
         let page_one = serde_json::to_vec(
             &(1..=100)
-                .map(|id| json!({"id": id, "date_gmt": "2020-11-30T12:30:00"}))
+                .map(|id| comment(id, "2020-11-30T12:30:00"))
                 .collect::<Vec<_>>(),
         )?;
-        let page_two =
-            serde_json::to_vec(&[json!({"id": 101, "date_gmt": "2020-11-30T12:30:00"})])?;
+        let page_two = serde_json::to_vec(&[comment(101, "2020-11-30T12:30:00")])?;
 
         driver.inspect(&capture(&page_one, TWO_PAGES));
         driver.inspect(&capture(&page_two, TWO_PAGES));
@@ -890,10 +879,10 @@ mod tests {
     fn visibility_filtered_total_finishes_with_a_shortfall() {
         let mut driver =
             CommentDriver::with_before("https://example.com", timestamp(BEFORE)).expect("a driver");
-        let payload = br#"[{"id": 1, "date_gmt": "2020-11-30T12:30:00"}]"#;
+        let payload = serde_json::to_vec(&[comment(1, "2020-11-30T12:30:00")]).expect("valid JSON");
         let response = b"HTTP/1.1 200 OK\r\nX-WP-Total: 2\r\nX-WP-TotalPages: 1\r\n\r\n";
 
-        let inspection = driver.inspect(&capture(payload, response));
+        let inspection = driver.inspect(&capture(&payload, response));
         assert_eq!(inspection.error, None);
         assert_eq!(driver.next(), None);
 
@@ -911,20 +900,21 @@ mod tests {
     fn more_visible_ids_than_reported_are_validated_then_rejected() {
         let mut driver =
             CommentDriver::with_before("https://example.com", timestamp(BEFORE)).expect("a driver");
-        let payload = br#"[
-            {"id": 1, "date_gmt": "2020-11-30T12:30:00"},
-            {"id": 2, "date_gmt": "2020-11-30T12:30:00"}
-        ]"#;
+        let payload = serde_json::to_vec(&[
+            comment(1, "2020-11-30T12:30:00"),
+            comment(2, "2020-11-30T12:30:00"),
+        ])
+        .expect("valid JSON");
         let response = b"HTTP/1.1 200 OK\r\nX-WP-Total: 1\r\nX-WP-TotalPages: 1\r\n\r\n";
 
-        let first = driver.inspect(&capture(payload, response));
+        let first = driver.inspect(&capture(&payload, response));
         assert_eq!(first.error, None);
         assert_eq!(
             driver.next(),
             Some(page_request(&driver, 1, Some(&driver.first_comment_url())))
         );
 
-        let second = driver.inspect(&capture(payload, response));
+        let second = driver.inspect(&capture(&payload, response));
         assert!(second.error.is_some());
     }
 
