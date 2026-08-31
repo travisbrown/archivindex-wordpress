@@ -626,9 +626,18 @@ mod tests {
         json!({
             "id": id,
             "post": 1,
-            "date": null,
+            "parent": 0,
+            "author": 0,
+            "author_name": "Example",
+            "author_url": "",
+            "date": date_gmt,
             "date_gmt": date_gmt,
-            "type": "comment"
+            "content": {"rendered": "Example comment"},
+            "link": "https://example.com/post/#comment-1",
+            "status": "approved",
+            "type": "comment",
+            "meta": [],
+            "_links": {}
         })
     }
 

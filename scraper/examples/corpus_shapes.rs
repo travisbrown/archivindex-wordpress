@@ -2,7 +2,8 @@
 //!
 //! Set `SHOW_SHAPES` to report top-level field names and JSON types for each route. Use
 //! `SHOW_FIELDS` with a comma-separated field list to recursively report selected shapes;
-//! `MERGE_FIELD_ROUTES` combines those observations across routes.
+//! `MERGE_FIELD_ROUTES` combines those observations across routes. Set `SHOW_STRING_VALUES` to
+//! include the frequency of every observed string value for those fields.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -25,8 +26,12 @@ struct Shape {
     objects: usize,
     other: usize,
     empty_arrays: usize,
+    items: usize,
+    entries: usize,
     keys: BTreeMap<String, BTreeSet<&'static str>>,
+    key_counts: BTreeMap<String, usize>,
     entry_keys: BTreeMap<String, BTreeSet<&'static str>>,
+    entry_key_counts: BTreeMap<String, usize>,
 }
 
 #[derive(Default)]
@@ -46,6 +51,7 @@ struct FieldShape {
     count: usize,
     types: BTreeSet<&'static str>,
     samples: BTreeSet<String>,
+    string_values: BTreeMap<String, usize>,
 }
 
 const fn kind(value: &Value) -> &'static str {
@@ -61,10 +67,12 @@ const fn kind(value: &Value) -> &'static str {
 
 fn add_keys(
     keys: &mut BTreeMap<String, BTreeSet<&'static str>>,
+    counts: &mut BTreeMap<String, usize>,
     object: &serde_json::Map<String, Value>,
 ) {
     for (name, value) in object {
         keys.entry(name.clone()).or_default().insert(kind(value));
+        *counts.entry(name.clone()).or_default() += 1;
     }
 }
 
@@ -82,6 +90,9 @@ fn add_field_shape(shapes: &mut BTreeMap<String, FieldShape>, path: &str, value:
             }
             _ => {}
         }
+    }
+    if let Value::String(value) = value {
+        *shape.string_values.entry(value.clone()).or_default() += 1;
     }
 
     match value {
@@ -222,7 +233,8 @@ impl Corpus {
                     shape.empty_arrays += usize::from(values.is_empty());
                     for value in values {
                         if let Value::Object(object) = value {
-                            add_keys(&mut shape.keys, &object);
+                            shape.items += 1;
+                            add_keys(&mut shape.keys, &mut shape.key_counts, &object);
                             for field in &self.inspected_fields {
                                 if let Some(value) = object.get(field) {
                                     add_field_shape(
@@ -241,7 +253,8 @@ impl Corpus {
                 }
                 Value::Object(object) => {
                     shape.objects += 1;
-                    add_keys(&mut shape.keys, &object);
+                    shape.items += 1;
+                    add_keys(&mut shape.keys, &mut shape.key_counts, &object);
                     for field in &self.inspected_fields {
                         if let Some(value) = object.get(field) {
                             add_field_shape(
@@ -257,7 +270,8 @@ impl Corpus {
                     }
                     for value in object.values() {
                         if let Value::Object(entry) = value {
-                            add_keys(&mut shape.entry_keys, entry);
+                            shape.entries += 1;
+                            add_keys(&mut shape.entry_keys, &mut shape.entry_key_counts, entry);
                         }
                     }
                 }
@@ -276,28 +290,39 @@ impl Corpus {
         if env::var_os("SHOW_SHAPES").is_some() {
             for (route, shape) in self.shapes {
                 println!(
-                    "\n{route} payloads={} arrays={} (empty={}) objects={} other={}",
-                    shape.payloads, shape.arrays, shape.empty_arrays, shape.objects, shape.other
+                    "\n{route} payloads={} arrays={} (empty={}) objects={} items={} entries={} other={}",
+                    shape.payloads,
+                    shape.arrays,
+                    shape.empty_arrays,
+                    shape.objects,
+                    shape.items,
+                    shape.entries,
+                    shape.other
                 );
                 println!("fields:");
                 for (name, types) in shape.keys {
                     println!(
-                        "  {name}: {}",
-                        types.into_iter().collect::<Vec<_>>().join("|")
+                        "  {name}: {} ({}/{})",
+                        types.into_iter().collect::<Vec<_>>().join("|"),
+                        shape.key_counts[&name],
+                        shape.items
                     );
                 }
                 if !shape.entry_keys.is_empty() {
                     println!("object entry fields:");
                     for (name, types) in shape.entry_keys {
                         println!(
-                            "  {name}: {}",
-                            types.into_iter().collect::<Vec<_>>().join("|")
+                            "  {name}: {} ({}/{})",
+                            types.into_iter().collect::<Vec<_>>().join("|"),
+                            shape.entry_key_counts[&name],
+                            shape.entries
                         );
                     }
                 }
             }
         }
         if !self.inspected_fields.is_empty() {
+            let show_string_values = env::var_os("SHOW_STRING_VALUES").is_some();
             for (path, shape) in self.field_shapes {
                 println!(
                     "{path}: {} ({}){}",
@@ -312,6 +337,11 @@ impl Corpus {
                         )
                     }
                 );
+                if show_string_values && !shape.string_values.is_empty() {
+                    for (value, count) in shape.string_values {
+                        println!("  {count}: {value:?}");
+                    }
+                }
             }
         }
 

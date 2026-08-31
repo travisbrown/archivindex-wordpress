@@ -1929,7 +1929,7 @@ mod tests {
                 .find_map(|(name, value)| (name == "page").then(|| value.into_owned()))
                 .expect("a page parameter");
             let body = format!(
-                r#"[{{"id":{page},"post":1,"date":null,"date_gmt":"2026-08-20T00:00:0{page}","type":"comment"}}]"#
+                r#"[{{"id":{page},"post":1,"parent":0,"author":0,"author_name":"Example","author_url":"","date":"2026-08-20T00:00:0{page}","date_gmt":"2026-08-20T00:00:0{page}","content":{{"rendered":"Example comment"}},"link":"http://localhost/post/#comment-{page}","status":"approved","type":"comment","meta":[],"_links":{{}}}}]"#
             );
             let headers = [
                 ("content-type", "application/json"),

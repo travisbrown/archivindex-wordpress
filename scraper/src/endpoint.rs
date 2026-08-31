@@ -72,12 +72,10 @@ pub struct EndpointType {
     pub rest_base: String,
     /// The REST namespace containing the collection, normally `wp/v2`.
     pub rest_namespace: String,
-    /// Taxonomies registered for a post type. Empty for taxonomy responses.
-    #[serde(default)]
-    pub taxonomies: Vec<String>,
-    /// Post types registered for a taxonomy. Empty for post type responses.
-    #[serde(default)]
-    pub types: Vec<String>,
+    /// Taxonomies registered for a post type. Absent from taxonomy responses.
+    pub taxonomies: Option<Vec<String>>,
+    /// Post types registered for a taxonomy. Absent from post-type responses.
+    pub types: Option<Vec<String>>,
     #[serde(rename = "_links")]
     links: EndpointTypeLinks,
 }
@@ -162,7 +160,7 @@ impl<'de> serde::de::Deserialize<'de> for RegistryEntries {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 struct EndpointTypeLinks {
-    #[serde(rename = "wp:items", default)]
+    #[serde(rename = "wp:items")]
     wp_items: Vec<EndpointTypeLink>,
 }
 
@@ -375,15 +373,21 @@ mod tests {
             post.items_url(),
             Some("https://example.com/wp-json/wp/v2/posts")
         );
-        assert_eq!(post.taxonomies, ["category", "post_tag"]);
-        assert!(post.types.is_empty());
+        assert_eq!(
+            post.taxonomies.as_ref().expect("post taxonomies"),
+            &["category", "post_tag"]
+        );
+        assert_eq!(post.types, None);
 
         assert_eq!(
             category.items_urls().collect::<Vec<_>>(),
             ["https://example.com/wp-json/wp/v2/categories"]
         );
-        assert_eq!(category.types, ["post"]);
-        assert!(category.taxonomies.is_empty());
+        assert_eq!(
+            category.types.as_ref().expect("category post types"),
+            &["post"]
+        );
+        assert_eq!(category.taxonomies, None);
 
         assert!(EndpointType::parse_registry(b"[]").is_err());
         assert!(EndpointType::parse_registry(b"{\"post\": {}}").is_err());
