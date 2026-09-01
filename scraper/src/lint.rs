@@ -1000,13 +1000,19 @@ fn lint_series(
     report: &mut Analysis,
 ) -> Option<usize> {
     let name = probe.collection.name();
-    let split = captures
+    let successful = captures
+        .iter()
+        .filter(|capture| is_successful_page_capture(&groups[capture.group]))
+        .cloned()
+        .collect::<Vec<_>>();
+    let split = successful
         .iter()
         .enumerate()
         .skip(1)
         .find_map(|(index, capture)| (capture.page == Some(1)).then_some(index));
-    let (pagination, legacy_validation) =
-        split.map_or((captures, &[][..]), |index| captures.split_at(index));
+    let (pagination, legacy_validation) = split.map_or((successful.as_slice(), &[][..]), |index| {
+        successful.split_at(index)
+    });
     let total_pages = pagination
         .iter()
         .filter_map(|capture| response_metadata(&groups[capture.group]))
@@ -1047,6 +1053,20 @@ fn lint_series(
         }
     }
     total_pages
+}
+
+fn is_successful_page_capture(group: &CaptureGroup) -> bool {
+    let Some(response) = &group.response else {
+        return false;
+    };
+    if response
+        .truncation
+        .as_deref()
+        .is_some_and(|reason| !intentional_revisit_truncation(response, reason))
+    {
+        return false;
+    }
+    response_metadata(group).is_some_and(|metadata| matches!(metadata.status, 200 | 304))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1550,6 +1570,23 @@ mod tests {
         group
     }
 
+    fn failed_capture(number: usize, via: &str, status: u16) -> CaptureGroup {
+        let mut group = capture(number, via, 3);
+        let response = group.response.as_mut().expect("a stored response");
+        response.body = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n").into_bytes();
+        group
+    }
+
+    fn truncated_capture(number: usize, via: &str) -> CaptureGroup {
+        let mut group = capture(number, via, 3);
+        group
+            .response
+            .as_mut()
+            .expect("a stored response")
+            .truncation = Some("time".to_owned());
+        group
+    }
+
     fn pages(groups: &[CaptureGroup]) -> Vec<PageCapture> {
         groups
             .iter()
@@ -1716,6 +1753,26 @@ mod tests {
             &mut legacy,
         );
         assert!(legacy.findings.is_empty(), "{:?}", legacy.findings);
+    }
+
+    #[test]
+    fn failed_page_attempts_do_not_consume_pagination_positions() {
+        let probe = probe();
+        let mut groups = vec![capture(1, &probe.url, 3)];
+        let page_one = groups[0].url.clone();
+        groups.push(failed_capture(2, &page_one, 503));
+        groups.push(capture(2, &page_one, 3));
+        let page_two = groups[2].url.clone();
+        groups.push(truncated_capture(3, &page_two));
+        groups.push(capture(3, &page_two, 3));
+        let captures = pages(&groups);
+        let mut report = Analysis::default();
+
+        assert_eq!(
+            lint_series(&groups, &probe, &captures, &mut HashSet::new(), &mut report,),
+            Some(3)
+        );
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
     }
 
     #[test]
