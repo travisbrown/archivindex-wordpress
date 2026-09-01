@@ -26,7 +26,7 @@ const REFERENCE_FIELDS: [&str; 4] = [
 #[derive(Debug, clap::Args)]
 pub struct CombineOptions {
     /// Directory containing the archive and resume-run WARC files.
-    #[clap(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    #[clap(short, long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub(super) input: PathBuf,
     /// Domain prefix used by the archive session names, such as `example.com`.
     #[clap(long, value_name = "DOMAIN")]

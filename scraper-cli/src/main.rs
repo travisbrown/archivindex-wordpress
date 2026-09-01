@@ -83,7 +83,7 @@ fn combine_wp_archives(options: &CombineOptions, quiet: bool) -> Result<CommandO
 
 /// Validate the capture graph and collection pagination protocol of an archive WARC.
 fn lint_wp_archive(options: &LintOptions, quiet: bool) -> Result<CommandOutcome, Error> {
-    let report = lint_archive(&options.warc)?;
+    let report = lint_archive(&options.input)?;
     log::info!("core lints passed: {}", report.core_lints_passed);
     for finding in &report.findings {
         let subject = finding.subject.as_ref().map_or_else(
@@ -108,7 +108,7 @@ fn lint_wp_archive(options: &LintOptions, quiet: bool) -> Result<CommandOutcome,
         }
         println!(
             "{}: {} roots, {} known probes, {} custom probes, {} paginated endpoints; {} errors, {} warnings",
-            options.warc.display(),
+            options.input.display(),
             report.roots,
             report.known_probes,
             report.custom_probes,
@@ -235,7 +235,7 @@ fn resume_archive(options: &ResumeArchiveOptions, quiet: bool) -> Result<Command
 
 /// Recover and print the command continuing a collection archive WARC.
 fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcome, Error> {
-    let info = inspect_archive(&options.warc)?;
+    let info = inspect_archive(&options.input)?;
     for warning in &info.warnings {
         log::warn!("{warning}");
     }
@@ -243,7 +243,7 @@ fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcom
     match info.checkpoint {
         Checkpoint::Finished => {
             if !quiet {
-                println!("{} is complete", options.warc.display());
+                println!("{} is complete", options.input.display());
             }
             if info.warnings.is_empty() {
                 Ok(CommandOutcome::Success)
@@ -254,14 +254,14 @@ fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcom
         Checkpoint::Resume(_) => {
             let _ = info
                 .before
-                .ok_or_else(|| Error::MissingResumeCutoff(options.warc.clone()))?;
+                .ok_or_else(|| Error::MissingResumeCutoff(options.input.clone()))?;
             let parent = options
-                .warc
+                .input
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new("."));
-            let session = session_name_from_warc(&options.warc)
-                .ok_or_else(|| Error::SessionName(options.warc.clone()))?;
+            let session = session_name_from_warc(&options.input)
+                .ok_or_else(|| Error::SessionName(options.input.clone()))?;
             println!(
                 "{}",
                 resume_command(
@@ -275,7 +275,7 @@ fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcom
             );
             Ok(CommandOutcome::ReportedProblems)
         }
-        Checkpoint::Initial => Err(Error::InitialArchiveCannotResume(options.warc.clone())),
+        Checkpoint::Initial => Err(Error::InitialArchiveCannotResume(options.input.clone())),
     }
 }
 
@@ -1205,7 +1205,7 @@ impl Driver for ProgressingCommentDriver {
 /// Comments captured with conflicting contents are logged as warnings, and the exit status
 /// reflects that some were found.
 fn read_wp_comments(options: ReadCommentsOptions) -> Result<CommandOutcome, Error> {
-    let result = read_comments(options.warc)?;
+    let result = read_comments(options.input)?;
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
 
@@ -1230,14 +1230,14 @@ fn read_wp_comments(options: ReadCommentsOptions) -> Result<CommandOutcome, Erro
 
 /// Check that every page advertised in a comments WARC has a qualifying capture record.
 fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<CommandOutcome, Error> {
-    let collections = check_comment_collections(&options.warc)?;
+    let collections = check_comment_collections(&options.input)?;
     if collections.is_empty() {
         log::warn!(
             "{} has no qualifying WordPress comments capture",
-            options.warc.display()
+            options.input.display()
         );
         if !quiet {
-            println!("{} is incomplete", options.warc.display());
+            println!("{} is incomplete", options.input.display());
         }
         return Ok(CommandOutcome::ReportedProblems);
     }
@@ -1256,7 +1256,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
             if !quiet {
                 println!(
                     "{} is complete for {}: all {} advertised comment pages were captured",
-                    options.warc.display(),
+                    options.input.display(),
                     collection.endpoint,
                     coverage
                         .total_pages
@@ -1269,7 +1269,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
         match coverage.total_pages {
             None => log::warn!(
                 "{} has no qualifying record with a valid X-WP-TotalPages header for {}",
-                options.warc.display(),
+                options.input.display(),
                 collection.endpoint
             ),
             Some(total_pages) => {
@@ -1282,7 +1282,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
                     .then(|| format!(" (and {} more)", missing_count - shown.len()));
                 log::warn!(
                     "{} is missing qualifying records for {} of {} advertised pages for {}: {}{}",
-                    options.warc.display(),
+                    options.input.display(),
                     missing_count,
                     total_pages,
                     collection.endpoint,
@@ -1298,7 +1298,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
         if !quiet {
             println!(
                 "{} is incomplete for {}",
-                options.warc.display(),
+                options.input.display(),
                 collection.endpoint
             );
         }
@@ -1566,7 +1566,7 @@ struct ArchiveRunOptions {
     base: Site,
     /// Directory the session's plain WARC file, named after the session, is written to; it is
     /// created when missing (an existing file is not overwritten).
-    #[clap(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    #[clap(short, long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     output: PathBuf,
     /// URL-safe prefix shared by the session's timestamp-named WARC segment files; defaults to the
     /// base, with hyphens for its slashes.
@@ -1595,7 +1595,7 @@ struct ResumeArchiveOptions {
     #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     config: Option<PathBuf>,
     /// Directory containing every plain or compressed WARC segment from the archive run.
-    #[clap(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    #[clap(short, long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     output: PathBuf,
     /// Filename prefix shared by the archive run's WARC segments.
     #[clap(long)]
@@ -1620,30 +1620,32 @@ struct ResumeArchiveOptions {
 #[derive(Debug, clap::Args)]
 struct ResumeInfoOptions {
     /// Path of the plain or gzip-compressed WARC file to inspect.
-    #[clap(value_hint = clap::ValueHint::FilePath)]
-    warc: PathBuf,
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    input: PathBuf,
 }
 
 /// Options for reading comments from a WARC file.
 #[derive(Debug, clap::Args)]
 struct ReadCommentsOptions {
     /// Path of the plain or gzip-compressed WARC file to read.
-    warc: PathBuf,
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    input: PathBuf,
 }
 
 /// Options for checking comments page coverage in a WARC file.
 #[derive(Debug, clap::Args)]
 struct CheckCommentsOptions {
     /// Path of the plain or gzip-compressed WARC file to check.
-    warc: PathBuf,
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    input: PathBuf,
 }
 
 /// Options for linting a `WordPress` collection archive.
 #[derive(Debug, clap::Args)]
 struct LintOptions {
     /// Path of the plain or gzip-compressed WARC file to lint.
-    #[clap(value_hint = clap::ValueHint::FilePath)]
-    warc: PathBuf,
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    input: PathBuf,
 }
 
 /// Options for capturing pages missing from a comments WARC.
@@ -1654,9 +1656,11 @@ struct CompleteCommentsOptions {
     #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     config: Option<PathBuf>,
     /// Path of the plain or gzip-compressed WARC file to inspect.
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     input: PathBuf,
     /// Path of the completion WARC to write; a `.gz` suffix enables gzip compression (an existing
     /// file is not overwritten).
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     output: PathBuf,
 }
 
@@ -1668,10 +1672,11 @@ struct UpdateCommentsOptions {
     #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     config: Option<PathBuf>,
     /// Existing comments WARC, or a directory whose direct .warc and .warc.gz files are updated.
+    #[clap(short, long, value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
     input: PathBuf,
     /// Path of the WARC file to write; a `.gz` suffix enables gzip compression (an existing file
     /// is not overwritten).
-    #[clap(long)]
+    #[clap(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     output: PathBuf,
     /// URL-safe name identifying the update session and its WARC file.
     #[clap(long)]
@@ -1963,7 +1968,7 @@ mod tests {
             "capture.toml",
             "--base",
             "example.com/blog/",
-            "--output",
+            "-o",
             "archives",
             "--session-name",
             "blog-2026",
@@ -2007,7 +2012,7 @@ mod tests {
             "archive",
             "--base",
             "example.com",
-            "--output",
+            "-o",
             "archives",
         ])
         .expect("valid options");
@@ -2030,6 +2035,7 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "lint",
+            "-i",
             "archives/site.warc.gz",
         ])
         .expect("valid options");
@@ -2037,7 +2043,7 @@ mod tests {
             panic!("expected the lint command");
         };
 
-        assert_eq!(options.warc, PathBuf::from("archives/site.warc.gz"));
+        assert_eq!(options.input, PathBuf::from("archives/site.warc.gz"));
     }
 
     #[test]
@@ -2045,11 +2051,11 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "combine",
-            "--input",
+            "-i",
             "archives",
             "--domain",
             "example.com",
-            "--output",
+            "-o",
             "example.com.warc.gz",
         ])
         .expect("valid options");
@@ -2290,6 +2296,7 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "resume-info",
+            "--input",
             "archives/site.warc.gz",
         ])
         .expect("valid options");
@@ -2297,7 +2304,7 @@ mod tests {
         let Command::ResumeInfo(options) = options.command else {
             panic!("expected the resume information command");
         };
-        assert_eq!(options.warc, PathBuf::from("archives/site.warc.gz"));
+        assert_eq!(options.input, PathBuf::from("archives/site.warc.gz"));
     }
 
     #[test]
@@ -2541,6 +2548,7 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "read-comments",
+            "-i",
             "comments.warc.gz",
         ])
         .expect("valid options");
@@ -2549,7 +2557,7 @@ mod tests {
             panic!("expected the reading command");
         };
 
-        assert_eq!(options.warc, PathBuf::from("comments.warc.gz"));
+        assert_eq!(options.input, PathBuf::from("comments.warc.gz"));
     }
 
     #[test]
@@ -2557,6 +2565,7 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "check-comments",
+            "--input",
             "comments.warc.gz",
         ])
         .expect("valid options");
@@ -2565,7 +2574,7 @@ mod tests {
             panic!("expected the checking command");
         };
 
-        assert_eq!(options.warc, PathBuf::from("comments.warc.gz"));
+        assert_eq!(options.input, PathBuf::from("comments.warc.gz"));
     }
 
     #[test]
@@ -2573,9 +2582,11 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "complete-comments",
+            "-i",
             "comments.warc.gz",
+            "-o",
             "completion.warc.gz",
-            "--config",
+            "-c",
             "capture.toml",
         ])
         .expect("valid options");
@@ -2590,12 +2601,55 @@ mod tests {
     }
 
     #[test]
+    fn path_arguments_are_never_positional() {
+        for arguments in [
+            vec!["archivindex-wordpress-scraper", "lint", "comments.warc.gz"],
+            vec![
+                "archivindex-wordpress-scraper",
+                "resume-info",
+                "comments.warc.gz",
+            ],
+            vec![
+                "archivindex-wordpress-scraper",
+                "read-comments",
+                "comments.warc.gz",
+            ],
+            vec![
+                "archivindex-wordpress-scraper",
+                "check-comments",
+                "comments.warc.gz",
+            ],
+            vec![
+                "archivindex-wordpress-scraper",
+                "complete-comments",
+                "comments.warc.gz",
+                "completion.warc.gz",
+            ],
+            vec![
+                "archivindex-wordpress-scraper",
+                "update-comments",
+                "comments.warc.gz",
+                "--output",
+                "update.warc.gz",
+                "--session-name",
+                "comments-update",
+            ],
+        ] {
+            assert!(
+                Opts::try_parse_from(arguments).is_err(),
+                "a positional path was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn update_command_uses_a_one_day_default_overlap() {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "update-comments",
+            "--input",
             "historical.warc.gz",
-            "--output",
+            "-o",
             "update.warc.gz",
             "--session-name",
             "comments-update-2026-08-20",
@@ -2617,6 +2671,7 @@ mod tests {
         let options = Opts::try_parse_from([
             "archivindex-wordpress-scraper",
             "update-comments",
+            "-i",
             "historical.warc",
             "--output",
             "update.warc",
@@ -2818,7 +2873,7 @@ mod tests {
                 && collection.coverage.is_complete()
         }));
         assert_eq!(
-            check_wp_comments(&CheckCommentsOptions { warc: output }, true,)?,
+            check_wp_comments(&CheckCommentsOptions { input: output }, true,)?,
             archivindex_cli_support::CommandOutcome::Success
         );
 
@@ -3047,7 +3102,7 @@ mod tests {
         );
 
         assert_eq!(
-            resume_info(&ResumeInfoOptions { warc }, true)?,
+            resume_info(&ResumeInfoOptions { input: warc }, true)?,
             CommandOutcome::ReportedProblems
         );
 
