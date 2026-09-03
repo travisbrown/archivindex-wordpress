@@ -7,14 +7,13 @@ use std::path::{Path, PathBuf};
 use archivindex_warc::io::read::WarcReader;
 use archivindex_warc::record::header::{RevisitHeader, RevisitProfile};
 use archivindex_warc::record::{FieldsBlock, Record, http, payload};
+pub use archivindex_warc_ops::lint::{Custom, Finding, Severity};
 use archivindex_warc_ops::lint::{Findings, Linter, Rule, Violation};
 use serde_json::Value;
 use url::Url;
 
 use crate::archive::{Site, SiteError};
 use crate::endpoint::{Collection, Endpoint, EndpointType, ROOT_ENDPOINTS, Registry};
-
-pub use archivindex_warc_ops::lint::{Custom, Finding, Severity};
 
 /// Counts advertised for one successfully probed and paginated endpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1642,10 +1641,7 @@ mod tests {
 
     #[test]
     fn simply_browser_challenges_do_not_count_as_initial_captures() {
-        let challenge = root_capture(
-            454,
-            r#"<script sc-challenge>fetch('/.sc-verify/')</script>"#,
-        );
+        let challenge = root_capture(454, r"<script sc-challenge>fetch('/.sc-verify/')</script>");
         assert!(is_server_challenge(&challenge));
 
         let groups = [challenge, root_capture(200, "{}")];

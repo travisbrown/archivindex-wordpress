@@ -6,6 +6,7 @@ mod combine;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -754,10 +755,11 @@ fn resume_command(
     }
     let default_per_page = per_page.default_value();
     if default_per_page != DEFAULT_PER_PAGE {
-        command.push_str(&format!(" --per-page {default_per_page}"));
+        write!(command, " --per-page {default_per_page}").expect("writing to a String cannot fail");
     }
     for (endpoint, value) in per_page.endpoint_values() {
-        command.push_str(&format!(" --per-page {}:{value}", shell_word(endpoint)));
+        write!(command, " --per-page {}:{value}", shell_word(endpoint))
+            .expect("writing to a String cannot fail");
     }
 
     command
