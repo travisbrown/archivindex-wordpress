@@ -92,7 +92,7 @@ dependencies = [
 [[package]]
 name = "archivindex-cli-support"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-core#8bd3736a8905d7f364ca0a177ca9d57cbec23cdb"
+source = "git+https://github.com/travisbrown/archivindex#8bd3736a8905d7f364ca0a177ca9d57cbec23cdb"
 dependencies = [
  "clap",
  "ctrlc",
@@ -108,7 +108,7 @@ dependencies = [
 [[package]]
 name = "archivindex-test-support"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-core#8bd3736a8905d7f364ca0a177ca9d57cbec23cdb"
+source = "git+https://github.com/travisbrown/archivindex#8bd3736a8905d7f364ca0a177ca9d57cbec23cdb"
 dependencies = [
  "proptest",
 ]
