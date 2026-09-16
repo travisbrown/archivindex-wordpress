@@ -27,11 +27,10 @@ flate2 = { version = "1", default-features = false, features = ["miniz_oxide"] }
 humantime = "2"
 indicatif = "0.18"
 log = "0.4"
-proptest = "1"
+proptest = { version = "1.11", features = ["attr-macro"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
-test-strategy = "0.4"
 thiserror = "2"
 url = "2"
 

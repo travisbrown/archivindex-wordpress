@@ -576,16 +576,16 @@ mod tests {
     use super::{CommentDriver, CommentProgress, DateTime, bounds, format_timestamp};
     use crate::strategies;
 
-    #[test_strategy::proptest]
+    #[proptest::property_test]
     fn bounds_agree_with_the_iterator_extremes(items: Vec<i64>) {
         let expected = items.iter().copied().min().zip(items.iter().copied().max());
 
         prop_assert_eq!(bounds(items.into_iter()), expected);
     }
 
-    #[test_strategy::proptest]
+    #[proptest::property_test]
     fn timestamps_are_rendered_at_whole_second_utc_precision(
-        #[strategy(strategies::datetime())] timestamp: DateTime<Utc>,
+        #[strategy = strategies::datetime()] timestamp: DateTime<Utc>,
     ) {
         let rendered = format_timestamp(timestamp);
         let parsed = DateTime::parse_from_rfc3339(&rendered).unwrap();
@@ -595,11 +595,11 @@ mod tests {
         prop_assert_eq!(parsed.timestamp_subsec_nanos(), 0);
     }
 
-    #[test_strategy::proptest]
+    #[proptest::property_test]
     fn comment_urls_query_the_endpoint_of_the_site(
-        #[strategy(strategies::url())] base: url::Url,
-        #[strategy(strategies::datetime())] before: DateTime<Utc>,
-        #[strategy(1..=100_usize)] page: usize,
+        #[strategy = strategies::url()] base: url::Url,
+        #[strategy = strategies::datetime()] before: DateTime<Utc>,
+        #[strategy = 1..=100_usize] page: usize,
     ) {
         let driver = CommentDriver::with_before(base.as_str(), before).unwrap();
         let url = url::Url::parse(&driver.comment_url(page)).unwrap();
