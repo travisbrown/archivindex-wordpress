@@ -597,7 +597,7 @@ mod tests {
 
     #[proptest::property_test]
     fn comment_urls_query_the_endpoint_of_the_site(
-        #[strategy = strategies::url()] base: url::Url,
+        #[strategy = archivindex_test_support::prop::http_url()] base: url::Url,
         #[strategy = strategies::datetime()] before: DateTime<Utc>,
         #[strategy = 1..=100_usize] page: usize,
     ) {

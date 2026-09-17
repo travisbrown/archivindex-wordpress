@@ -548,32 +548,29 @@ fn redirect_chain<'a>(
             ));
             return None;
         };
-        if !(300..400).contains(&metadata.status) || metadata.status == 304 {
+        if !matches!(metadata.status, 301 | 302 | 303 | 307 | 308) {
             return Some(Chain::Complete {
                 after: index + 1,
                 terminal: group,
             });
         }
-        let Some(location) = metadata
+        let target = metadata
             .header("location")
             .and_then(|value| std::str::from_utf8(value).ok())
-        else {
-            warnings.push(format!(
-                "redirect captured from {} has no readable Location header",
-                group.url
-            ));
-            return None;
+            .and_then(|location| Url::parse(&response.url).ok()?.join(location).ok())
+            .filter(|target| {
+                matches!(target.scheme(), "http" | "https")
+                    && target.username().is_empty()
+                    && target.password().is_none()
+            });
+        // The archiver records redirects without a usable HTTP target as final responses.
+        let Some(mut target) = target else {
+            return Some(Chain::Complete {
+                after: index + 1,
+                terminal: group,
+            });
         };
-        let Some(target) = Url::parse(&response.url)
-            .ok()
-            .and_then(|base| base.join(location).ok())
-        else {
-            warnings.push(format!(
-                "redirect captured from {} has an invalid Location header {location:?}",
-                group.url
-            ));
-            return None;
-        };
+        target.set_fragment(None);
         index += 1;
         if groups
             .get(index)
@@ -603,4 +600,83 @@ fn merge_endpoints(discovered: &[Collection], inferred: &[Collection]) -> Vec<Co
         }
     }
     endpoints
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evidence::StoredMetadata;
+
+    fn group(url: &str, status: u16, location: Option<&str>) -> CaptureGroup {
+        let location = location.map_or_else(String::new, |value| format!("Location: {value}\r\n"));
+        CaptureGroup {
+            url: url.to_owned(),
+            response: Some(StoredResponse {
+                url: url.to_owned(),
+                body: format!("HTTP/1.1 {status} Response\r\n{location}Content-Length: 0\r\n\r\n")
+                    .into_bytes(),
+                truncation: None,
+                revisit: None,
+            }),
+            metadata: vec![StoredMetadata {
+                url: None,
+                via: None,
+                fields: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn terminal_responses_match_live_capture_policy() {
+        for (status, location) in [
+            (200, None),
+            (300, Some("/choice")),
+            (304, None),
+            (305, Some("/proxy")),
+            (306, Some("/unused")),
+            (399, Some("/unknown")),
+            (302, None),
+            (302, Some("mailto:user@example.com")),
+            (302, Some("https://user:secret@example.com/")),
+        ] {
+            let groups = [group("https://example.com/wp-json", status, location)];
+            let mut warnings = Vec::new();
+            assert!(matches!(
+                redirect_chain(&groups, 0, &groups[0].url, &mut warnings),
+                Some(Chain::Complete { after: 1, .. })
+            ));
+            assert!(warnings.is_empty(), "{status}: {warnings:?}");
+        }
+    }
+
+    #[test]
+    fn followed_redirects_compare_the_target_without_its_fragment() {
+        for status in [301, 302, 303, 307, 308] {
+            let groups = [
+                group(
+                    "https://example.com/wp-json",
+                    status,
+                    Some("/wp-json/final#section"),
+                ),
+                group("https://example.com/wp-json/final", 200, None),
+            ];
+            let mut warnings = Vec::new();
+            let Some(Chain::Complete { after, terminal }) =
+                redirect_chain(&groups, 0, &groups[0].url, &mut warnings)
+            else {
+                panic!("expected a complete chain: {warnings:?}");
+            };
+            assert_eq!(after, 2);
+            assert_eq!(terminal.url, groups[1].url);
+            assert!(warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_missing_followed_redirect_remains_incomplete() {
+        let groups = [group("https://example.com/wp-json", 302, Some("/next"))];
+        let mut warnings = Vec::new();
+        assert!(redirect_chain(&groups, 0, &groups[0].url, &mut warnings).is_none());
+        assert_eq!(warnings.len(), 1);
+    }
 }

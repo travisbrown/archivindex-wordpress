@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use archivindex_archiver::Archiver;
-use archivindex_archiver::capture::{ArchiveSummary, CaptureControl, CaptureEvent};
+use archivindex_archiver::capture::{ArchiveSummary, ProgressControl, ProgressEvent};
 use archivindex_publication::{Policy, Publication};
 use archivindex_warc::io::read::{self as warc_read, WarcReader};
 use archivindex_warc::io::write::{self as warc_write, Compression, WarcWriter};
@@ -163,12 +163,12 @@ pub fn complete_comments_with_delay(
         let mut capture_gzip = None;
         let mut copy_error = None;
         let mut delay = RequestDelay::new(request_delay);
-        let archive = archiver.archive_to_path_with_events(
+        let archive = archiver.archive_to_path_with_progress(
             &requested_urls,
             &capture_path,
-            &mut |event: CaptureEvent<'_>| {
+            &mut |event: ProgressEvent<'_>| {
                 delay.before(&event);
-                if matches!(event, CaptureEvent::Written { .. }) {
+                if matches!(event, ProgressEvent::Written { .. }) {
                     let gzip = match capture_gzip {
                         Some(gzip) => gzip,
                         None => match is_gzip_file(&partial_path) {
@@ -178,7 +178,7 @@ pub fn complete_comments_with_delay(
                             }
                             Err(error) => {
                                 copy_error = Some(error.into());
-                                return CaptureControl::Cancel;
+                                return ProgressControl::Cancel;
                             }
                         },
                     };
@@ -191,10 +191,10 @@ pub fn complete_comments_with_delay(
                         &via_urls,
                     ) {
                         copy_error = Some(error);
-                        return CaptureControl::Cancel;
+                        return ProgressControl::Cancel;
                     }
                 }
-                CaptureControl::Continue
+                ProgressControl::Continue
             },
         )?;
         if let Some(error) = copy_error {
@@ -318,8 +318,8 @@ impl RequestDelay {
         }
     }
 
-    fn before(&mut self, event: &CaptureEvent<'_>) {
-        if matches!(event, CaptureEvent::Started { .. }) {
+    fn before(&mut self, event: &ProgressEvent<'_>) {
+        if matches!(event, ProgressEvent::Started { .. }) {
             if self.requested {
                 std::thread::sleep(self.duration);
             }
@@ -577,9 +577,9 @@ mod tests {
     use std::path::Path;
     use std::time::{Duration, Instant};
 
-    use archivindex_archiver::capture::CaptureEvent;
+    use archivindex_archiver::capture::ProgressEvent;
     use archivindex_archiver::{Archiver, Config};
-    use archivindex_test_support::http;
+    use archivindex_test_support::http::{self, RequestExt as _};
     use archivindex_warc::io::read::WarcReader;
     use archivindex_warc::io::write::WarcWriter;
     use archivindex_warc::record::Record;
@@ -721,7 +721,7 @@ mod tests {
     fn completion_waits_between_request_starts() {
         let duration = Duration::from_millis(20);
         let mut delay = RequestDelay::new(duration);
-        let started = CaptureEvent::Started {
+        let started = ProgressEvent::Started {
             url: "https://example.com/",
             attempt: 1,
         };
@@ -812,9 +812,9 @@ mod tests {
     fn completion_reuses_the_exact_url_and_original_warcinfo()
     -> Result<(), Box<dyn std::error::Error>> {
         let expected_target = "/wp-json/wp/v2/comments?before=a%2Fb&orderby=id&page=2&per_page=100";
-        let (port, server) = http::serve_with(1, |request| {
+        let server = http::serve_with(1, |request| {
             let reply = http::response(
-                "200 OK",
+                200,
                 &[
                     ("content-type", "application/json"),
                     ("x-wp-total", "0"),
@@ -825,10 +825,10 @@ mod tests {
 
             (
                 reply,
-                (request.method().to_owned(), request.path().to_owned()),
+                (request.method.to_string(), request.path().to_owned()),
             )
         })?;
-        let authority = format!("127.0.0.1:{port}");
+        let authority = format!("127.0.0.1:{}", server.port());
 
         let directory = tempfile::tempdir()?;
         let input = directory.path().join("input.warc");
@@ -861,7 +861,7 @@ mod tests {
 
         let archiver = Archiver::new(Config::default())?;
         let summary = complete_comments(&archiver, &input, &output)?;
-        let requests = server.join().expect("the test server thread");
+        let requests = server.finish();
         assert!(!partial_path(&output).exists());
 
         assert_eq!(summary.missing_pages, [2]);

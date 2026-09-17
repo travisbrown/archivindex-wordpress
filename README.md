@@ -40,9 +40,17 @@ filename order. This can include more than one session; for example, `--domain s
 
 ## Development
 
-The workspace requires Rust 1.97 or later. Run its tests and build its documentation with:
+The workspace requires Rust 1.97 or later. Install the workspace policy checker with:
 
 ```console
+cargo install --locked --git https://github.com/travisbrown/archivindex \
+  --rev f6e131cb8255090c5384f6cdcb099348247ad1ff cargo-archivindex-build
+```
+
+Check the workspace policy, run its tests, and build its documentation with:
+
+```console
+cargo archivindex-build check
 cargo test --locked --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
 ```
