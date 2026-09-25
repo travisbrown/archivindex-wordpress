@@ -225,7 +225,7 @@ fn resume_archive(options: &ResumeArchiveOptions, quiet: bool) -> Result<Command
             first.probes,
         ));
     let run = ArchiveRunOptions {
-        config: options.config.clone(),
+        connection: options.connection.clone(),
         base: first.site,
         output: options.output.clone(),
         session_name: Some(inventory.next_name(&options.session_name)?),
@@ -318,7 +318,7 @@ fn run_archive_for_session(
     std::fs::create_dir_all(&options.output)?;
     let output = options.output.join(format!("{session_name}.warc"));
     // The directory accumulates one plain WARC per run, to be merged later.
-    let mut config: Config = config::load(options.config.as_deref())?;
+    let mut config = options.connection.load()?;
     config.gzip_warc = false;
     let mut archiver = Archiver::new(config)?;
     if let Some(cookie) = &options.cookie {
@@ -387,7 +387,7 @@ fn run_archive_for_session(
                 resume_command(
                     &options.output,
                     archive_session,
-                    options.config.as_deref(),
+                    options.connection.config.as_deref(),
                     options.revisit_index.as_deref(),
                     (!summary_has_pagination(&summary)).then_some(before),
                     &options.per_page,
@@ -604,8 +604,8 @@ impl PerPageOptions {
 
 /// The command continuing the archive segments sharing `session_name`.
 ///
-/// A cookie is not repeated because it is a secret. The capture limit is not repeated so a
-/// continuation finishes by default.
+/// Cookies and proxy URIs are not repeated because they may contain secrets. The capture limit
+/// is not repeated so a continuation finishes by default.
 fn resume_command(
     output: &Path,
     session_name: &str,
@@ -755,7 +755,7 @@ fn update_comments(options: &UpdateCommentsOptions, quiet: bool) -> Result<Comma
     capture_comment_run(
         runs,
         CommentRunOptions {
-            config: options.config.as_deref(),
+            connection: &options.connection,
             cookie: options.cookie.as_deref(),
             output: &options.output,
             session_name: &options.session_name,
@@ -873,7 +873,7 @@ struct CommentRun {
 
 #[derive(Clone, Copy)]
 struct CommentRunOptions<'a> {
-    config: Option<&'a Path>,
+    connection: &'a ConnectionOptions,
     cookie: Option<&'a str>,
     output: &'a Path,
     session_name: &'a str,
@@ -901,7 +901,7 @@ fn capture_comment_run(
         active: None,
         progress: Rc::clone(&comment_progress),
     };
-    let config = load_config_for_output(options.config, options.output)?;
+    let config = load_config_for_output(options.connection, options.output)?;
     let mut archiver = Archiver::new(config)?;
     if let Some(cookie) = options.cookie {
         for site_url in &site_urls {
@@ -993,8 +993,8 @@ fn report_comment_run(
 }
 
 /// Load the archiver settings, making the output filename authoritative for WARC compression.
-fn load_config_for_output(config: Option<&Path>, output: &Path) -> Result<Config, Error> {
-    let mut config: Config = config::load(config)?;
+fn load_config_for_output(connection: &ConnectionOptions, output: &Path) -> Result<Config, Error> {
+    let mut config = connection.load()?;
     config.gzip_warc = output
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"));
@@ -1179,7 +1179,7 @@ fn complete_wp_comments(
     options: &CompleteCommentsOptions,
     quiet: bool,
 ) -> Result<CommandOutcome, Error> {
-    let config: Config = config::load(options.config.as_deref())?;
+    let config = options.connection.load()?;
     let request_delay = config.session.request_delay;
     let archiver = Archiver::new(config)?;
     let progress = spinner("Completing comments", None);
@@ -1421,13 +1421,34 @@ enum Command {
     Update(UpdateCommentsOptions),
 }
 
-/// Options for archiving a site.
-#[derive(Clone, Debug, clap::Args)]
-struct ArchiveRunOptions {
+/// Archiver configuration shared by commands that make requests.
+#[derive(Clone, Debug, Default, clap::Args)]
+struct ConnectionOptions {
     /// A TOML or JSON archiver configuration file, recognized by its extension; every key is
     /// optional and takes its default when absent.
     #[arg(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     config: Option<PathBuf>,
+    /// Proxy URI, overriding the config file (use socks5h://host:port for proxy DNS).
+    #[arg(long, value_name = "URI")]
+    proxy: Option<String>,
+}
+
+impl ConnectionOptions {
+    fn load(&self) -> Result<Config, Error> {
+        let mut config: Config = config::load(self.config.as_deref())?;
+        if let Some(proxy) = &self.proxy {
+            config.proxy = Some(proxy.clone());
+        }
+
+        Ok(config)
+    }
+}
+
+/// Options for archiving a site.
+#[derive(Clone, Debug, clap::Args)]
+struct ArchiveRunOptions {
+    #[command(flatten)]
+    connection: ConnectionOptions,
     /// Site host with an optional installation path, such as `example.com/blog`.
     /// HTTPS is the default; an explicit `http://` or `https://` scheme is also accepted.
     #[arg(long, value_name = "BASE")]
@@ -1459,9 +1480,8 @@ struct ArchiveRunOptions {
 /// Options for continuing an archive from its checkpoint.
 #[derive(Debug, clap::Args)]
 struct ResumeArchiveOptions {
-    /// A TOML or JSON archiver configuration file.
-    #[arg(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
-    config: Option<PathBuf>,
+    #[command(flatten)]
+    connection: ConnectionOptions,
     /// Directory containing every plain or compressed WARC segment from the archive run.
     #[arg(short, long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     output: PathBuf,
@@ -1519,10 +1539,8 @@ struct LintOptions {
 /// Options for capturing pages missing from a comments WARC.
 #[derive(Debug, clap::Args)]
 struct CompleteCommentsOptions {
-    /// A TOML or JSON archiver configuration file, recognized by its extension; every key is
-    /// optional and takes its default when absent.
-    #[arg(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
-    config: Option<PathBuf>,
+    #[command(flatten)]
+    connection: ConnectionOptions,
     /// Path of the plain or gzip-compressed WARC file to inspect.
     #[arg(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     input: PathBuf,
@@ -1535,10 +1553,8 @@ struct CompleteCommentsOptions {
 /// Options for incrementally updating an archived comments collection.
 #[derive(Debug, clap::Args)]
 struct UpdateCommentsOptions {
-    /// A TOML or JSON archiver configuration file, recognized by its extension; every key is
-    /// optional and takes its default when absent.
-    #[arg(short, long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
-    config: Option<PathBuf>,
+    #[command(flatten)]
+    connection: ConnectionOptions,
     /// Existing comments WARC, or a directory of `.warc` and `.warc.gz` files used to plan updates.
     /// The input files are left unchanged; subdirectories are not searched.
     #[arg(short, long, value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]

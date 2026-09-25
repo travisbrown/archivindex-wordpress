@@ -38,6 +38,26 @@ The `combine` command selects files by a `--domain` prefix followed by a hyphen 
 filename order. This can include more than one session; for example, `--domain site` also selects
 `site-extra-1788032113.warc`.
 
+## SOCKS proxies
+
+The `archive`, `resume-archive`, `complete-comments`, and `update-comments` commands accept
+`--proxy URI`, with the same behavior as the archiver CLI:
+
+```console
+archivindex-wordpress-scraper archive --base example.com --output archives \
+  --proxy socks5h://127.0.0.1:1080
+```
+
+Alternatively, set the top-level `proxy` key in a TOML or JSON configuration file. `--proxy`
+takes precedence. Use `socks5h://` to resolve destination hostnames through the proxy, or
+`socks5://` for local DNS. Both support username/password authentication, for example
+`socks5h://user:password@host:1080`; percent-encode reserved characters in credentials.
+No proxy is used by default, and environment proxy settings are ignored.
+
+All requests, including redirects and retries, use the configured proxy. Proxy failures never
+fall back to direct connections. Printed resume commands omit `--proxy` because its URI may
+contain credentials, so supply it again when resuming or set it in the configuration file.
+
 ## Development
 
 The workspace requires Rust 1.97 or later. Install the workspace policy checker with:

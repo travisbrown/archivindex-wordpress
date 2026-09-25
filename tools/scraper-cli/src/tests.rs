@@ -29,7 +29,7 @@ use flate2::write::GzEncoder;
 
 use super::{
     ArchiveProgress, ArchiveRunOptions, ArchiveRunState, CheckCommentsOptions, CombineOptions,
-    Command, CommentRun, CommentRunOptions, Config, Error, Opts, PerPageOptions,
+    Command, CommentRun, CommentRunOptions, Config, ConnectionOptions, Error, Opts, PerPageOptions,
     ResumeArchiveOptions, ResumeInfoOptions, capture_comment_run, check_wp_comments,
     combine_archives, comment_update_inputs, load_config_for_output, page_total_change_warning,
     parse_per_page, resume_archive, resume_command, resume_info, run_archive,
@@ -128,7 +128,7 @@ fn serve_site(requests: usize) -> std::io::Result<Server<String>> {
 
 fn archive_options(port: u16, output: &Path, session_name: &str) -> ArchiveRunOptions {
     ArchiveRunOptions {
-        config: None,
+        connection: ConnectionOptions::default(),
         base: Site::parse(&format!("http://127.0.0.1:{port}")).expect("a site"),
         output: output.to_owned(),
         session_name: Some(session_name.to_owned()),
@@ -285,7 +285,10 @@ fn archive_command_reads_workflow_and_config_options() {
     assert_eq!(options.base.base(), "example.com/blog");
     assert_eq!(options.output, PathBuf::from("archives"));
     assert_eq!(options.session_name.as_deref(), Some("blog-2026"));
-    assert_eq!(options.config, Some(PathBuf::from("capture.toml")));
+    assert_eq!(
+        options.connection.config,
+        Some(PathBuf::from("capture.toml"))
+    );
     assert_eq!(options.revisit_index, Some(PathBuf::from("state.sqlite3")));
     assert_eq!(options.limit, Some(12));
     assert_eq!(options.per_page.default_value(), 20);
@@ -553,7 +556,10 @@ fn resume_command_requires_only_the_output_and_session_name() {
 
     assert_eq!(options.output, PathBuf::from("archives"));
     assert_eq!(options.session_name, "example.com");
-    assert_eq!(options.config, Some(PathBuf::from("capture.toml")));
+    assert_eq!(
+        options.connection.config,
+        Some(PathBuf::from("capture.toml"))
+    );
     assert_eq!(options.revisit_index, Some(PathBuf::from("state.sqlite3")));
     assert_eq!(options.limit, Some(12));
     assert_eq!(options.per_page.default_value(), 10);
@@ -842,6 +848,102 @@ fn archive_command_does_not_duplicate_configuration_fields() {
 }
 
 #[test]
+fn capture_commands_accept_proxy_overrides() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    for (extension, contents) in [
+        ("toml", "proxy = \"socks5://localhost:1080\""),
+        ("json", r#"{"proxy":"socks5://localhost:1080"}"#),
+    ] {
+        let path = directory.path().join(format!("capture.{extension}"));
+        std::fs::write(&path, contents)?;
+        for command in [
+            vec!["archive", "--base", "example.com", "-o", "archives"],
+            vec!["resume-archive", "-o", "archives", "--session-name", "site"],
+            vec!["complete-comments", "-i", "in.warc", "-o", "out.warc"],
+            vec![
+                "update-comments",
+                "-i",
+                "in.warc",
+                "-o",
+                "out.warc",
+                "--session-name",
+                "site",
+            ],
+        ] {
+            for with_config in [false, true] {
+                for proxy in [None, Some("socks5h://user:password@localhost:9050")] {
+                    let mut args = vec!["archivindex-wordpress-scraper"];
+                    args.extend(&command);
+                    if with_config {
+                        args.extend(["--config", path.to_str().expect("a UTF-8 path")]);
+                    }
+                    if let Some(proxy) = proxy {
+                        args.extend(["--proxy", proxy]);
+                    }
+                    let connection = match Opts::try_parse_from(args)?.command {
+                        Command::Archive(options) => options.connection,
+                        Command::ResumeArchive(options) => options.connection,
+                        Command::Complete(options) => options.connection,
+                        Command::Update(options) => options.connection,
+                        _ => panic!("expected a capture command"),
+                    };
+                    assert_eq!(
+                        connection.load()?.proxy.as_deref(),
+                        proxy.or_else(|| with_config.then_some("socks5://localhost:1080")),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn capture_commands_reject_invalid_proxies_before_fetching()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let input = directory.path().join("input.warc");
+    write_update_warc(
+        &input,
+        "http://example.invalid/",
+        "2026-08-19T00:00:00",
+        false,
+    )?;
+    for command in ["archive", "complete-comments", "update-comments"] {
+        let output = directory.path().join(command);
+        let mut args = vec![
+            "archivindex-wordpress-scraper",
+            command,
+            "--proxy",
+            "http://localhost:1080",
+            "--output",
+            output.to_str().expect("a UTF-8 path"),
+        ];
+        if command == "archive" {
+            args.extend(["--base", "http://example.invalid"]);
+        } else {
+            args.extend(["--input", input.to_str().expect("a UTF-8 path")]);
+            if command == "update-comments" {
+                args.extend(["--session-name", "update"]);
+            }
+        }
+        let result = super::run(Opts::try_parse_from(args)?);
+        assert!(
+            matches!(
+                result,
+                Err(Error::Config(
+                    archivindex_archiver::ConfigError::InvalidProxy(_)
+                ))
+            ),
+            "{command}: {result:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn configuration_file_supplies_archiver_and_session_settings() {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let path = directory.path().join("capture.toml");
@@ -867,19 +969,23 @@ fn output_filename_controls_capture_compression() {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let path = directory.path().join("capture.toml");
     std::fs::write(&path, "gzip-warc = true\n").expect("write the configuration");
+    let connection = ConnectionOptions {
+        config: Some(path),
+        ..ConnectionOptions::default()
+    };
 
     assert!(
-        load_config_for_output(Some(&path), Path::new("comments.warc.gz"))
+        load_config_for_output(&connection, Path::new("comments.warc.gz"))
             .expect("load gzip output settings")
             .gzip_warc
     );
     assert!(
-        !load_config_for_output(Some(&path), Path::new("comments.warc"))
+        !load_config_for_output(&connection, Path::new("comments.warc"))
             .expect("load plain output settings")
             .gzip_warc
     );
     assert!(
-        load_config_for_output(None, Path::new("comments.warc.GZ"))
+        load_config_for_output(&ConnectionOptions::default(), Path::new("comments.warc.GZ"))
             .expect("load case-insensitive gzip output settings")
             .gzip_warc
     );
@@ -939,7 +1045,10 @@ fn complete_command_takes_input_and_output_warc_paths() {
 
     assert_eq!(options.input, PathBuf::from("comments.warc.gz"));
     assert_eq!(options.output, PathBuf::from("completion.warc.gz"));
-    assert_eq!(options.config, Some(PathBuf::from("capture.toml")));
+    assert_eq!(
+        options.connection.config,
+        Some(PathBuf::from("capture.toml"))
+    );
 }
 
 #[test]
@@ -1183,7 +1292,7 @@ fn multi_domain_update_starts_each_via_chain_at_its_own_first_page()
     let outcome = capture_comment_run(
         runs,
         CommentRunOptions {
-            config: None,
+            connection: &ConnectionOptions::default(),
             cookie: None,
             output: &output,
             session_name: "multi-domain-update",
@@ -1514,22 +1623,27 @@ fn resume_archive_reads_prior_segments_and_does_not_reprobe()
     encoder.write_all(&std::fs::read(&initial_warc)?)?;
     encoder.finish()?;
     std::fs::remove_file(initial_warc)?;
-    assert_eq!(
-        resume_archive(
-            &ResumeArchiveOptions {
-                config: None,
-                output: directory.path().to_owned(),
-                session_name: "site-chain".to_owned(),
-                before: Some(before()),
-                revisit_index: None,
-                limit: None,
-                per_page: PerPageOptions::default(),
-                cookie: None,
-            },
-            true,
-        )?,
-        CommandOutcome::Success
-    );
+    let mut options = ResumeArchiveOptions {
+        connection: ConnectionOptions {
+            proxy: Some("http://localhost:1080".to_owned()),
+            ..ConnectionOptions::default()
+        },
+        output: directory.path().to_owned(),
+        session_name: "site-chain".to_owned(),
+        before: Some(before()),
+        revisit_index: None,
+        limit: None,
+        per_page: PerPageOptions::default(),
+        cookie: None,
+    };
+    assert!(matches!(
+        resume_archive(&options, true),
+        Err(Error::Config(
+            archivindex_archiver::ConfigError::InvalidProxy(_)
+        ))
+    ));
+    options.connection.proxy = None;
+    assert_eq!(resume_archive(&options, true)?, CommandOutcome::Success);
 
     let requests = server.finish();
     assert_eq!(requests.len(), 22);
@@ -1619,7 +1733,7 @@ fn a_failure_during_the_initial_requests_is_fatal() -> Result<(), Box<dyn std::e
     let config = directory.path().join("capture.toml");
     std::fs::write(&config, "[session.retry]\nattempts = 1\n")?;
     let mut options = archive_options(dead_port()?, directory.path(), "site-unreachable");
-    options.config = Some(config);
+    options.connection.config = Some(config);
 
     let result = run_archive(
         ArchiveDriver::new(options.base.clone(), before()),
