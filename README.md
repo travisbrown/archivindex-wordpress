@@ -59,10 +59,11 @@ archivindex-wordpress-scraper archive --base example.com --output archives \
   --backend wreq --profile chrome_136
 ```
 
-Both backends use the configured proxy, timeouts, response limits, headers, cookies, and session
-settings. When an archive run stops early, its printed resume command preserves the selected
-backend and profile. The wreq backend uses browser-derived TLS emulation with HTTP/1 capture;
-configured headers, including the archiver's default `User-Agent`, take precedence over profile
+Both backends use the configured proxy, timeouts, response limits, cookies, and session settings.
+When an archive run stops early, its printed resume command preserves the selected backend and
+profile. The wreq backend uses browser-derived TLS emulation with HTTP/1 capture and always uses
+the profile's `User-Agent`, ignoring the configuration file's `user-agent` setting. New
+`warcinfo` records use that profile value too. Other configured headers take precedence over profile
 headers.
 
 ## SOCKS proxies

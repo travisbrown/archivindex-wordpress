@@ -1293,6 +1293,9 @@ enum Error {
     #[cfg(feature = "wreq")]
     #[error(transparent)]
     Profile(#[from] archivindex_archiver_backend_wreq::UnknownProfile),
+    #[cfg(feature = "wreq")]
+    #[error("wreq profile {0} has no valid User-Agent")]
+    ProfileUserAgent(String),
     #[error(transparent)]
     ConfigFile(#[from] config::Error),
     #[error(transparent)]
@@ -1446,7 +1449,7 @@ struct ConnectionOptions {
     /// Proxy URI, overriding the config file (use socks5h://host:port for proxy DNS).
     #[arg(long, value_name = "URI")]
     proxy: Option<String>,
-    /// The capture backend. Every other setting applies to whichever is chosen.
+    /// The capture backend. wreq always uses its profile's User-Agent.
     #[cfg(feature = "wreq")]
     #[arg(long, value_enum, default_value_t = Backend::Recorder)]
     backend: Backend,
@@ -1485,7 +1488,20 @@ impl ConnectionOptions {
     fn build_archiver(&self, config: Config) -> Result<Archiver, Error> {
         #[cfg(feature = "wreq")]
         if self.backend == Backend::Wreq {
+            use wreq::IntoEmulation as _;
+
             let profile = archivindex_archiver_backend_wreq::parse_profile(&self.profile)?;
+            // Keep the sent header and WARC metadata consistent with the selected profile.
+            let config = Config {
+                user_agent: profile
+                    .into_emulation()
+                    .headers
+                    .get("user-agent")
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| Error::ProfileUserAgent(self.profile.clone()))?
+                    .to_owned(),
+                ..config
+            };
             let backend = archivindex_archiver_backend_wreq::WreqBackend::new(profile)
                 .proxy(config.proxy.as_deref())?
                 .connect_timeout(Some(config.timeout))

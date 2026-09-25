@@ -1916,3 +1916,93 @@ fn wreq_uses_the_proxy_from_configuration_or_the_cli() -> Result<(), Box<dyn std
 
     Ok(())
 }
+
+#[cfg(feature = "wreq")]
+#[test]
+fn wreq_uses_the_profile_user_agent_for_requests_and_warcinfo()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (profile, marker) in [
+        ("chrome_136", "Chrome/136.0.0.0"),
+        ("firefox_135", "Firefox/135.0"),
+    ] {
+        for configured in [None, Some("CustomCrawler/1.0"), Some("invalid\r\nheader")] {
+            let server = serve_with(2, |request| {
+                let reply = if request.path() == "/" {
+                    response(302, &[("location", "/final")], "")
+                } else {
+                    response(200, &[], "captured")
+                };
+                (
+                    reply,
+                    request
+                        .header("user-agent")
+                        .expect("a User-Agent")
+                        .to_owned(),
+                )
+            })?;
+            let directory = tempfile::tempdir()?;
+            let output = directory.path().join("profile.warc");
+            let connection = ConnectionOptions {
+                backend: super::Backend::Wreq,
+                profile: profile.to_owned(),
+                ..ConnectionOptions::default()
+            };
+            let config = Config {
+                user_agent: configured.unwrap_or(Config::DEFAULT_USER_AGENT).to_owned(),
+                ..Config::default()
+            };
+            let archiver = connection.build_archiver(config)?;
+            let summary = archiver
+                .archive_to_path([format!("http://127.0.0.1:{}/", server.port())], &output)?;
+            assert!(summary.is_complete());
+            let user_agents = server.finish();
+            assert_eq!(user_agents.len(), 2);
+            assert!(user_agents[0].contains(marker), "{}", user_agents[0]);
+            assert_eq!(user_agents[0], user_agents[1]);
+            let reader = WarcReader::from_path(&output)?;
+            let Record::Warcinfo {
+                body: FieldsBlock::Fields(fields),
+                ..
+            } = reader
+                .iter_records::<NoExtension>()
+                .records()
+                .next()
+                .expect("a warcinfo record")?
+            else {
+                panic!("expected warcinfo fields");
+            };
+            assert_eq!(
+                fields.http_header_user_agent(),
+                Some(user_agents[0].as_str())
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn recorder_keeps_the_configured_user_agent() -> Result<(), Box<dyn std::error::Error>> {
+    let server = serve_with(1, |request| {
+        (
+            response(200, &[], "captured"),
+            request.header("user-agent").map(str::to_owned),
+        )
+    })?;
+    let directory = tempfile::tempdir()?;
+    let archiver = ConnectionOptions::default().build_archiver(Config {
+        user_agent: "CustomCrawler/1.0".to_owned(),
+        ..Config::default()
+    })?;
+    assert!(
+        archiver
+            .archive_to_path(
+                [format!("http://127.0.0.1:{}/", server.port())],
+                directory.path().join("recorder.warc"),
+            )?
+            .is_complete()
+    );
+    assert_eq!(server.finish(), [Some("CustomCrawler/1.0".to_owned())]);
+
+    Ok(())
+}

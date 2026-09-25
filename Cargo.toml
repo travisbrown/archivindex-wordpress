@@ -38,6 +38,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
 thiserror = "2"
 url = "2"
+# Match the experimental backend's observer-enabled fork.
+wreq = { version = "=0.16.1", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "deny"
