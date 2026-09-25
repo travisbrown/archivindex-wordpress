@@ -80,9 +80,13 @@ fn wreq_test(options: &WreqTestOptions, mut output: impl Write) -> Result<Comman
     let body = runtime.block_on(async {
         let client = wreq::Client::builder()
             .emulation(profile)
-            .redirect(wreq::redirect::Policy::limited(10))
-            .build()?;
-        let response = client.get(url.as_str()).send().await?;
+            .redirect(wreq::redirect::Policy::limited(10));
+        let client = if options.http_1 {
+            client.http1_only()
+        } else {
+            client
+        };
+        let response = client.build()?.get(url.as_str()).send().await?;
         log::info!(
             "{}: {:?} {}",
             response.uri(),
@@ -1484,6 +1488,9 @@ struct WreqTestOptions {
     /// Browser profile to emulate, such as `firefox_135`.
     #[arg(long, value_name = "NAME")]
     profile: String,
+    /// Use HTTP/1.1 only instead of negotiating HTTP/2.
+    #[arg(long)]
+    http_1: bool,
 }
 
 /// Archiver configuration shared by commands that make requests.
