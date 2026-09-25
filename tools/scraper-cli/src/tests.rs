@@ -1826,6 +1826,10 @@ fn changed_page_totals_report_successive_differences() {
 #[test]
 fn backend_options_require_the_wreq_feature() {
     Opts::command().debug_assert();
+    assert_eq!(
+        Opts::command().find_subcommand("wreq-test").is_some(),
+        cfg!(feature = "wreq"),
+    );
     for command in [
         "archive",
         "resume-archive",
@@ -2003,6 +2007,109 @@ fn recorder_keeps_the_configured_user_agent() -> Result<(), Box<dyn std::error::
             .is_complete()
     );
     assert_eq!(server.finish(), [Some("CustomCrawler/1.0".to_owned())]);
+
+    Ok(())
+}
+
+#[cfg(feature = "wreq")]
+#[test]
+fn wreq_test_requires_only_a_base_and_profile() {
+    let args = [
+        "archivindex-wordpress-scraper",
+        "wreq-test",
+        "--base",
+        "example.com/blog",
+        "--profile",
+        "firefox_135",
+    ];
+    let Command::WreqTest(options) = Opts::try_parse_from(args)
+        .expect("valid test options")
+        .command
+    else {
+        panic!("expected wreq-test options");
+    };
+    assert_eq!(options.base.root().as_str(), "https://example.com/blog/");
+    assert_eq!(options.profile, "firefox_135");
+    assert!(Opts::try_parse_from(&args[..4]).is_err());
+    for extra in ["--config", "--output", "--proxy", "--backend"] {
+        let mut args = args.to_vec();
+        args.extend([extra, "unused"]);
+        assert!(
+            Opts::try_parse_from(args).is_err(),
+            "unexpected {extra} option"
+        );
+    }
+}
+
+#[cfg(feature = "wreq")]
+#[test]
+fn wreq_test_follows_redirects_and_prints_the_decoded_body()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = b"{\"name\":\"Example WordPress site\"}\n";
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(body)?;
+    let compressed = encoder.finish()?;
+    let server = serve_with(2, move |request| {
+        assert!(
+            request
+                .header("user-agent")
+                .expect("profile UA")
+                .contains("Firefox/135.0")
+        );
+        assert_ne!(request.header("accept"), Some("*/*"));
+        assert_ne!(request.header("connection"), Some("close"));
+        let reply = if request.path() == "/blog/wp-json" {
+            response(302, &[("location", "/blog/wp-json/")], "")
+        } else {
+            response(
+                200,
+                &[
+                    ("content-encoding", "gzip"),
+                    ("content-type", "application/json"),
+                ],
+                &compressed,
+            )
+        };
+        (reply, request.path().to_owned())
+    })?;
+    let options = super::WreqTestOptions {
+        base: Site::parse(&format!("http://127.0.0.1:{}/blog", server.port()))?,
+        profile: "firefox_135".to_owned(),
+    };
+    let mut output = Vec::new();
+    assert_eq!(
+        super::wreq_test(&options, &mut output)?,
+        CommandOutcome::Success
+    );
+    assert_eq!(output, body);
+    assert_eq!(server.finish(), ["/blog/wp-json", "/blog/wp-json/"]);
+
+    Ok(())
+}
+
+#[cfg(feature = "wreq")]
+#[test]
+fn wreq_test_reports_http_and_profile_errors_without_printing_a_body()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = serve_with(1, |_| (response(403, &[], "Blocked"), ()))?;
+    let mut options = super::WreqTestOptions {
+        base: Site::parse(&format!("http://127.0.0.1:{}", server.port()))?,
+        profile: "firefox_135".to_owned(),
+    };
+    let mut output = Vec::new();
+    let Err(Error::Wreq(error)) = super::wreq_test(&options, &mut output) else {
+        panic!("expected an HTTP error");
+    };
+    assert_eq!(error.status().map(|status| status.as_u16()), Some(403));
+    assert!(output.is_empty());
+    assert_eq!(server.finish().len(), 1);
+
+    options.profile = "unknown-profile".to_owned();
+    assert!(matches!(
+        super::wreq_test(&options, &mut output),
+        Err(Error::Profile(_))
+    ));
+    assert!(output.is_empty());
 
     Ok(())
 }

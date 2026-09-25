@@ -66,6 +66,19 @@ the profile's `User-Agent`, ignoring the configuration file's `user-agent` setti
 `warcinfo` records use that profile value too. Other configured headers take precedence over profile
 headers.
 
+To test a profile with wreq's normal protocol negotiation, including HTTP/2, use:
+
+```console
+archivindex-wordpress-scraper wreq-test --base example.com --profile firefox_135
+```
+
+This command requires the `wreq` feature and requests `https://example.com/wp-json` directly
+with wreq, following up to ten redirects. It writes the decoded response body to standard output,
+or reports an error and exits with a nonzero status if the request fails. Add `-v` to log the
+response status and negotiated HTTP
+version to standard error. It takes only `--base` and `--profile`, without archive configuration
+or WARC output.
+
 ## SOCKS proxies
 
 The `archive`, `resume-archive`, `complete-comments`, and `update-comments` commands accept

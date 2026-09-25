@@ -64,7 +64,36 @@ fn run(opts: Opts) -> Result<CommandOutcome, Error> {
         Command::ResumeArchive(options) => resume_archive(&options, quiet),
         Command::ResumeInfo(options) => resume_info(&options, quiet),
         Command::Update(options) => update_comments(&options, quiet),
+        #[cfg(feature = "wreq")]
+        Command::WreqTest(options) => wreq_test(&options, std::io::stdout().lock()),
     }
+}
+
+/// Download the API root with the profile's normal wreq transport and headers.
+#[cfg(feature = "wreq")]
+fn wreq_test(options: &WreqTestOptions, mut output: impl Write) -> Result<CommandOutcome, Error> {
+    let profile = archivindex_archiver_backend_wreq::parse_profile(&options.profile)?;
+    let url = options.base.root().join("wp-json")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let body = runtime.block_on(async {
+        let client = wreq::Client::builder()
+            .emulation(profile)
+            .redirect(wreq::redirect::Policy::limited(10))
+            .build()?;
+        let response = client.get(url.as_str()).send().await?;
+        log::info!(
+            "{}: {:?} {}",
+            response.uri(),
+            response.version(),
+            response.status()
+        );
+        response.error_for_status()?.bytes().await
+    })?;
+    output.write_all(&body)?;
+
+    Ok(CommandOutcome::Success)
 }
 
 /// Combine a site's archive and resume-run segments into one WARC.
@@ -1296,6 +1325,9 @@ enum Error {
     #[cfg(feature = "wreq")]
     #[error("wreq profile {0} has no valid User-Agent")]
     ProfileUserAgent(String),
+    #[cfg(feature = "wreq")]
+    #[error("wreq request failed: {0}")]
+    Wreq(#[from] wreq::Error),
     #[error(transparent)]
     ConfigFile(#[from] config::Error),
     #[error(transparent)]
@@ -1436,6 +1468,22 @@ enum Command {
     /// Capture new comments in a window overlapping an existing comments WARC.
     #[command(name = "update-comments")]
     Update(UpdateCommentsOptions),
+    /// Download the API root directly with wreq, allowing HTTP/2 negotiation.
+    #[cfg(feature = "wreq")]
+    #[command(name = "wreq-test")]
+    WreqTest(WreqTestOptions),
+}
+
+/// Options for downloading the API root directly with wreq.
+#[cfg(feature = "wreq")]
+#[derive(Debug, clap::Args)]
+struct WreqTestOptions {
+    /// Site host with an optional installation path. HTTPS is the default.
+    #[arg(long, value_name = "BASE")]
+    base: Site,
+    /// Browser profile to emulate, such as `firefox_135`.
+    #[arg(long, value_name = "NAME")]
+    profile: String,
 }
 
 /// Archiver configuration shared by commands that make requests.
