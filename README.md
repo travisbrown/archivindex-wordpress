@@ -49,6 +49,8 @@ cargo build --release -p archivindex-wordpress-scraper-cli --features wreq
 
 This feature requires Rust 1.98 or later, a C and C++ compiler, CMake, and libclang. It builds
 BoringSSL from source and uses the observer-enabled wreq fork pinned in `Cargo.lock`.
+The workspace patches the archiver and WARC crates to the local `../archivindex-warc` checkout,
+which must be present when building. This includes the experimental backend's HTTP/2 support.
 
 The `archive`, `resume-archive`, `complete-comments`, and `update-comments` commands then accept
 `--backend recorder|wreq` and `--profile NAME`, matching the archiver CLI. The profile defaults
@@ -61,10 +63,11 @@ archivindex-wordpress-scraper archive --base example.com --output archives \
 
 Both backends use the configured proxy, timeouts, response limits, cookies, and session settings.
 When an archive run stops early, its printed resume command preserves the selected backend and
-profile. The wreq backend uses browser-derived TLS emulation with HTTP/1 capture and always uses
-the profile's `User-Agent`, ignoring the configuration file's `user-agent` setting. New
-`warcinfo` records use that profile value too. Other configured headers take precedence over profile
-headers.
+profile. The wreq backend negotiates HTTP/2 over HTTPS with HTTP/1 fallback. HTTP/2 messages are
+reconstructed for WARC storage and marked with `WARC-Protocol: h2`; HTTP/1 capture preserves wire
+bytes. It always uses the profile's `User-Agent`, ignoring the configuration file's `user-agent`
+setting. New `warcinfo` records use that profile value too. Other configured headers take precedence
+over profile headers.
 
 To test a profile with wreq's normal protocol negotiation, including HTTP/2, use:
 

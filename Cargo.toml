@@ -6,6 +6,15 @@ resolver = "3"
 [patch.crates-io]
 wreq = { git = "https://github.com/travisbrown/wreq", branch = "topic/archivindex-observer" }
 
+# Use the local HTTP/2 backend and matching WARC types throughout the dependency graph.
+[patch."https://github.com/travisbrown/archivindex-warc"]
+archivindex-archiver = { path = "../archivindex-warc/crates/archiver" }
+archivindex-archiver-backend-wreq = { path = "../archivindex-warc/experimental/wreq" }
+archivindex-warc = { path = "../archivindex-warc" }
+archivindex-warc-digest = { path = "../archivindex-warc/crates/digest" }
+archivindex-warc-ops = { path = "../archivindex-warc/crates/ops" }
+archivindex-warc-revisit-index = { path = "../archivindex-warc/crates/revisit-index" }
+
 [workspace.package]
 authors = ["Travis Brown <travisrobertbrown@gmail.com>"]
 repository = "https://github.com/travisbrown/archivindex-wordpress"

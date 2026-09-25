@@ -100,7 +100,6 @@ dependencies = [
 [[package]]
 name = "archivindex-archiver"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#15d0ebd948a11a603b7d330cc86459a4f3581ae6"
 dependencies = [
  "archivindex-publication",
  "archivindex-warc",
@@ -123,7 +122,6 @@ dependencies = [
 [[package]]
 name = "archivindex-archiver-backend-wreq"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#15d0ebd948a11a603b7d330cc86459a4f3581ae6"
 dependencies = [
  "archivindex-archiver",
  "archivindex-warc",
@@ -135,6 +133,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "wreq",
+ "wreq-proto",
  "wreq-util",
 ]
 
@@ -177,7 +176,6 @@ dependencies = [
 [[package]]
 name = "archivindex-warc"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#15d0ebd948a11a603b7d330cc86459a4f3581ae6"
 dependencies = [
  "archivindex-warc-digest",
  "chrono",
@@ -195,7 +193,6 @@ dependencies = [
 [[package]]
 name = "archivindex-warc-digest"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#15d0ebd948a11a603b7d330cc86459a4f3581ae6"
 dependencies = [
  "data-encoding",
  "md-5",
@@ -208,7 +205,6 @@ dependencies = [
 [[package]]
 name = "archivindex-warc-ops"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#15d0ebd948a11a603b7d330cc86459a4f3581ae6"
 dependencies = [
  "archivindex-publication",
  "archivindex-warc",
@@ -222,7 +218,6 @@ dependencies = [
 [[package]]
 name = "archivindex-warc-revisit-index"
 version = "0.1.0"
-source = "git+https://github.com/travisbrown/archivindex-warc#15d0ebd948a11a603b7d330cc86459a4f3581ae6"
 dependencies = [
  "archivindex-warc",
  "fluent-uri",
