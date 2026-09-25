@@ -654,7 +654,7 @@ fn a_session_is_printed_as_a_minimal_resume_command() {
         resume_command(
             Path::new("archives"),
             "example.com",
-            None,
+            &ConnectionOptions::default(),
             None,
             None,
             &PerPageOptions::default(),
@@ -671,7 +671,7 @@ fn a_session_is_printed_as_a_minimal_resume_command() {
         resume_command(
             Path::new("archives"),
             "example.com",
-            None,
+            &ConnectionOptions::default(),
             None,
             None,
             &configured,
@@ -683,7 +683,10 @@ fn a_session_is_printed_as_a_minimal_resume_command() {
         resume_command(
             Path::new("archive output/it's here"),
             "site's run",
-            Some(Path::new("capture files/site's.toml")),
+            &ConnectionOptions {
+                config: Some(PathBuf::from("capture files/site's.toml")),
+                ..ConnectionOptions::default()
+            },
             Some(Path::new("state files/site.sqlite3")),
             Some(before()),
             &PerPageOptions::default(),
@@ -927,6 +930,21 @@ fn capture_commands_reject_invalid_proxies_before_fetching()
             if command == "update-comments" {
                 args.extend(["--session-name", "update"]);
             }
+        }
+        #[cfg(feature = "wreq")]
+        {
+            let mut wreq_args = args.clone();
+            wreq_args.extend(["--backend", "wreq", "--profile", "unknown-profile"]);
+            assert!(matches!(
+                super::run(Opts::try_parse_from(wreq_args)?),
+                Err(Error::Profile(_))
+            ));
+            let mut wreq_args = args.clone();
+            wreq_args.extend(["--backend", "wreq"]);
+            assert!(matches!(
+                super::run(Opts::try_parse_from(wreq_args)?),
+                Err(Error::Backend(_))
+            ));
         }
         let result = super::run(Opts::try_parse_from(args)?);
         assert!(
@@ -1643,6 +1661,16 @@ fn resume_archive_reads_prior_segments_and_does_not_reprobe()
         ))
     ));
     options.connection.proxy = None;
+    #[cfg(feature = "wreq")]
+    {
+        options.connection.backend = super::Backend::Wreq;
+        options.connection.profile = "unknown-profile".to_owned();
+        assert!(matches!(
+            resume_archive(&options, true),
+            Err(Error::Profile(_))
+        ));
+        options.connection.profile = "chrome_136".to_owned();
+    }
     assert_eq!(resume_archive(&options, true)?, CommandOutcome::Success);
 
     let requests = server.finish();
@@ -1793,4 +1821,98 @@ fn changed_page_totals_report_successive_differences() {
                  differences: +2, -1"
         )
     );
+}
+
+#[test]
+fn backend_options_require_the_wreq_feature() {
+    Opts::command().debug_assert();
+    for command in [
+        "archive",
+        "resume-archive",
+        "complete-comments",
+        "update-comments",
+    ] {
+        let cli = Opts::command();
+        let args = cli.find_subcommand(command).expect("a capture command");
+        for flag in ["backend", "profile"] {
+            assert_eq!(
+                args.get_arguments().any(|arg| arg.get_id() == flag),
+                cfg!(feature = "wreq"),
+                "{command} --{flag}",
+            );
+        }
+    }
+}
+
+#[cfg(feature = "wreq")]
+#[test]
+fn wreq_selection_and_profile_are_preserved_when_resuming() {
+    let parse = |extra: &[&str]| {
+        let mut args = vec![
+            "archivindex-wordpress-scraper",
+            "archive",
+            "--base",
+            "example.com",
+            "--output",
+            "archives",
+        ];
+        args.extend_from_slice(extra);
+        let Command::Archive(options) = Opts::try_parse_from(args).expect("valid options").command
+        else {
+            panic!("expected archive options");
+        };
+        options.connection
+    };
+    let default = parse(&[]);
+    assert_eq!(default.backend, super::Backend::Recorder);
+    assert_eq!(default.profile, "chrome_136");
+    let default_wreq = parse(&["--backend", "wreq"]);
+    assert_eq!(default_wreq.profile, "chrome_136");
+    assert!(default_wreq.build_archiver(Config::default()).is_ok());
+
+    let connection = parse(&["--backend", "wreq", "--profile", "firefox_135"]);
+    assert!(connection.build_archiver(Config::default()).is_ok());
+    let command = resume_command(
+        Path::new("archives"),
+        "example.com",
+        &connection,
+        None,
+        None,
+        &PerPageOptions::default(),
+    );
+    let Command::ResumeArchive(resume) = Opts::try_parse_from(command.split_whitespace())
+        .expect("valid resume options")
+        .command
+    else {
+        panic!("expected resume options");
+    };
+    assert_eq!(resume.connection.backend, super::Backend::Wreq);
+    assert_eq!(resume.connection.profile, "firefox_135");
+}
+
+#[cfg(feature = "wreq")]
+#[test]
+fn wreq_uses_the_proxy_from_configuration_or_the_cli() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let config = directory.path().join("capture.toml");
+    std::fs::write(&config, "proxy = 'socks5h://localhost:invalid'\n")?;
+    let mut connection = ConnectionOptions {
+        config: Some(config.clone()),
+        backend: super::Backend::Wreq,
+        ..ConnectionOptions::default()
+    };
+    assert!(matches!(
+        connection.build_archiver(connection.load()?),
+        Err(Error::Backend(_))
+    ));
+    connection.proxy = Some("socks5h://localhost:1080".to_owned());
+    assert!(connection.build_archiver(connection.load()?).is_ok());
+    std::fs::write(&config, "proxy = 'socks5h://localhost:1080'\n")?;
+    connection.proxy = Some("socks5h://localhost:invalid".to_owned());
+    assert!(matches!(
+        connection.build_archiver(connection.load()?),
+        Err(Error::Backend(_))
+    ));
+
+    Ok(())
 }

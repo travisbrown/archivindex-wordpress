@@ -38,6 +38,33 @@ The `combine` command selects files by a `--domain` prefix followed by a hyphen 
 filename order. This can include more than one session; for example, `--domain site` also selects
 `site-extra-1788032113.warc`.
 
+## Capture backends
+
+The built-in recorder is the default. To enable the experimental wreq backend, build the CLI
+with its `wreq` feature:
+
+```console
+cargo build --release -p archivindex-wordpress-scraper-cli --features wreq
+```
+
+This feature requires Rust 1.98 or later, a C and C++ compiler, CMake, and libclang. It builds
+BoringSSL from source and uses the observer-enabled wreq fork pinned in `Cargo.lock`.
+
+The `archive`, `resume-archive`, `complete-comments`, and `update-comments` commands then accept
+`--backend recorder|wreq` and `--profile NAME`, matching the archiver CLI. The profile defaults
+to `chrome_136` and applies only to wreq:
+
+```console
+archivindex-wordpress-scraper archive --base example.com --output archives \
+  --backend wreq --profile chrome_136
+```
+
+Both backends use the configured proxy, timeouts, response limits, headers, cookies, and session
+settings. When an archive run stops early, its printed resume command preserves the selected
+backend and profile. The wreq backend uses browser-derived TLS emulation with HTTP/1 capture;
+configured headers, including the archiver's default `User-Agent`, take precedence over profile
+headers.
+
 ## SOCKS proxies
 
 The `archive`, `resume-archive`, `complete-comments`, and `update-comments` commands accept
@@ -60,7 +87,8 @@ contain credentials, so supply it again when resuming or set it in the configura
 
 ## Development
 
-The workspace requires Rust 1.97 or later. Install the workspace policy checker with:
+The workspace requires Rust 1.97 or later; the optional `wreq` feature requires Rust 1.98 and
+the native build tools listed above. Install the workspace policy checker with:
 
 ```console
 cargo install --locked --git https://github.com/travisbrown/archivindex \

@@ -77,6 +77,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-hack
+      - name: Install BoringSSL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
       # Every package on its own, with no features, its defaults, and each pair of features.
       - name: Lint every feature combination
         run: >-
@@ -99,6 +101,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Install BoringSSL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
       # The lockfile keeps the other jobs reproducible; this one deliberately updates it to catch
       # breakage from semver-compatible dependency releases before a user hits it.
       - name: Update dependencies
@@ -144,8 +148,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The experimental wreq backend is exercised with native tooling in the Linux jobs.
       - name: Test
-        run: cargo test --locked --workspace --all-features
+        run: cargo test --locked --workspace --features bundled
 
   msrv:
     name: Rust 1.97 compatibility
@@ -156,8 +161,9 @@ jobs:
         with:
           toolchain: 1.97.0
       - uses: Swatinem/rust-cache@v2
+      # The optional wreq backend requires Rust 1.98.
       - name: Check workspace
-        run: cargo check --locked --workspace --all-targets --all-features
+        run: cargo check --locked --workspace --all-targets --features bundled
 
   coverage:
     name: Coverage
@@ -169,6 +175,8 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
+      - name: Install BoringSSL build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
       - name: Generate coverage
         run: >-
           cargo llvm-cov --locked --workspace --all-features --lcov

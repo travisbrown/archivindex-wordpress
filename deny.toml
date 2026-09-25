@@ -37,4 +37,6 @@ unknown-git = "deny"
 allow-git = [
   "https://github.com/travisbrown/archivindex",
   "https://github.com/travisbrown/archivindex-warc",
+  # The experimental backend needs the unreleased connection observer API.
+  "https://github.com/travisbrown/wreq",
 ]

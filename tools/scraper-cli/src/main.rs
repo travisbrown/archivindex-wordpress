@@ -272,7 +272,7 @@ fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcom
                 resume_command(
                     parent,
                     &session,
-                    None,
+                    &ConnectionOptions::default(),
                     None,
                     None,
                     &PerPageOptions::default(),
@@ -320,7 +320,7 @@ fn run_archive_for_session(
     // The directory accumulates one plain WARC per run, to be merged later.
     let mut config = options.connection.load()?;
     config.gzip_warc = false;
-    let mut archiver = Archiver::new(config)?;
+    let mut archiver = options.connection.build_archiver(config)?;
     if let Some(cookie) = &options.cookie {
         archiver = archiver.cookie_for(options.base.root().as_str(), cookie)?;
     }
@@ -387,7 +387,7 @@ fn run_archive_for_session(
                 resume_command(
                     &options.output,
                     archive_session,
-                    options.connection.config.as_deref(),
+                    &options.connection,
                     options.revisit_index.as_deref(),
                     (!summary_has_pagination(&summary)).then_some(before),
                     &options.per_page,
@@ -609,7 +609,7 @@ impl PerPageOptions {
 fn resume_command(
     output: &Path,
     session_name: &str,
-    config: Option<&Path>,
+    connection: &ConnectionOptions,
     revisit_index: Option<&Path>,
     before: Option<DateTime<Utc>>,
     per_page: &PerPageOptions,
@@ -619,13 +619,21 @@ fn resume_command(
         shell_word(&output.to_string_lossy()),
         shell_word(session_name),
     );
-    for (flag, path) in [("--config", config), ("--revisit-index", revisit_index)] {
+    for (flag, path) in [
+        ("--config", connection.config.as_deref()),
+        ("--revisit-index", revisit_index),
+    ] {
         if let Some(path) = path {
             command.push(' ');
             command.push_str(flag);
             command.push(' ');
             command.push_str(&shell_word(&path.to_string_lossy()));
         }
+    }
+    #[cfg(feature = "wreq")]
+    if connection.backend == Backend::Wreq {
+        command.push_str(" --backend wreq --profile ");
+        command.push_str(&shell_word(&connection.profile));
     }
     if let Some(before) = before {
         command.push_str(" --before ");
@@ -902,7 +910,7 @@ fn capture_comment_run(
         progress: Rc::clone(&comment_progress),
     };
     let config = load_config_for_output(options.connection, options.output)?;
-    let mut archiver = Archiver::new(config)?;
+    let mut archiver = options.connection.build_archiver(config)?;
     if let Some(cookie) = options.cookie {
         for site_url in &site_urls {
             archiver = archiver.cookie_for(site_url, cookie)?;
@@ -1181,7 +1189,7 @@ fn complete_wp_comments(
 ) -> Result<CommandOutcome, Error> {
     let config = options.connection.load()?;
     let request_delay = config.session.request_delay;
-    let archiver = Archiver::new(config)?;
+    let archiver = options.connection.build_archiver(config)?;
     let progress = spinner("Completing comments", None);
     let summary =
         complete_comments_with_delay(&archiver, &options.input, &options.output, request_delay)?;
@@ -1279,6 +1287,12 @@ enum Error {
     Archive(#[from] archivindex_archiver::Error),
     #[error("invalid archiver configuration: {0}")]
     Config(#[from] archivindex_archiver::ConfigError),
+    #[cfg(feature = "wreq")]
+    #[error("cannot configure wreq backend: {0}")]
+    Backend(#[from] archivindex_archiver::backend::Error),
+    #[cfg(feature = "wreq")]
+    #[error(transparent)]
+    Profile(#[from] archivindex_archiver_backend_wreq::UnknownProfile),
     #[error(transparent)]
     ConfigFile(#[from] config::Error),
     #[error(transparent)]
@@ -1422,7 +1436,8 @@ enum Command {
 }
 
 /// Archiver configuration shared by commands that make requests.
-#[derive(Clone, Debug, Default, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
+#[cfg_attr(not(feature = "wreq"), derive(Default))]
 struct ConnectionOptions {
     /// A TOML or JSON archiver configuration file, recognized by its extension; every key is
     /// optional and takes its default when absent.
@@ -1431,9 +1446,61 @@ struct ConnectionOptions {
     /// Proxy URI, overriding the config file (use socks5h://host:port for proxy DNS).
     #[arg(long, value_name = "URI")]
     proxy: Option<String>,
+    /// The capture backend. Every other setting applies to whichever is chosen.
+    #[cfg(feature = "wreq")]
+    #[arg(long, value_enum, default_value_t = Backend::Recorder)]
+    backend: Backend,
+    /// The browser profile the `wreq` backend emulates, such as `chrome_136`.
+    #[cfg(feature = "wreq")]
+    #[arg(long, value_name = "NAME", default_value = "chrome_136")]
+    profile: String,
+}
+
+#[cfg(feature = "wreq")]
+impl Default for ConnectionOptions {
+    fn default() -> Self {
+        Self {
+            config: None,
+            proxy: None,
+            backend: Backend::Recorder,
+            profile: "chrome_136".to_owned(),
+        }
+    }
+}
+
+/// The capture backend to archive with.
+#[cfg(feature = "wreq")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum Backend {
+    /// The built-in synchronous recorder.
+    #[default]
+    Recorder,
+    /// Browser-derived TLS emulation constrained to HTTP/1.
+    Wreq,
 }
 
 impl ConnectionOptions {
+    /// Apply transport settings as well as the archiver's shared capture settings.
+    #[cfg_attr(not(feature = "wreq"), allow(clippy::unused_self))]
+    fn build_archiver(&self, config: Config) -> Result<Archiver, Error> {
+        #[cfg(feature = "wreq")]
+        if self.backend == Backend::Wreq {
+            let profile = archivindex_archiver_backend_wreq::parse_profile(&self.profile)?;
+            let backend = archivindex_archiver_backend_wreq::WreqBackend::new(profile)
+                .proxy(config.proxy.as_deref())?
+                .connect_timeout(Some(config.timeout))
+                .io_timeout(Some(config.timeout))
+                .max_response_length(config.max_response_length);
+
+            return Ok(Archiver::with_backend(
+                config,
+                std::sync::Arc::new(backend),
+            )?);
+        }
+
+        Ok(Archiver::new(config)?)
+    }
+
     fn load(&self) -> Result<Config, Error> {
         let mut config: Config = config::load(self.config.as_deref())?;
         if let Some(proxy) = &self.proxy {
