@@ -40,7 +40,7 @@ pub struct ResumeInfo {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The input file could not be opened or read.
-    #[error("cannot read {}: {source}", path.display())]
+    #[error("cannot read {}", path.display())]
     Io {
         /// Path that was being read.
         path: PathBuf,
@@ -49,7 +49,7 @@ pub enum Error {
         source: std::io::Error,
     },
     /// A WARC record is syntactically or semantically invalid.
-    #[error("cannot read a WARC record from {}: {source}", path.display())]
+    #[error("cannot read a WARC record from {}", path.display())]
     Warc {
         /// Path that was being read.
         path: PathBuf,
@@ -61,7 +61,7 @@ pub enum Error {
     #[error("{} contains no WordPress REST API requests", .0.display())]
     NoWordPressRequests(PathBuf),
     /// The inferred installation URL is not a valid archive site.
-    #[error("cannot infer a WordPress site from {url:?}: {source}")]
+    #[error("cannot infer a WordPress site from {url:?}")]
     Site {
         /// Request URL used for inference.
         url: String,
@@ -668,7 +668,7 @@ mod tests {
             };
             assert_eq!(after, 2);
             assert_eq!(terminal.url, groups[1].url);
-            assert!(warnings.is_empty());
+            assert!(warnings.is_empty(), "{warnings:?}");
         }
     }
 

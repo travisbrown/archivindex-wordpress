@@ -48,9 +48,11 @@ cargo build --release -p archivindex-wordpress-scraper-cli --features wreq
 ```
 
 This feature requires Rust 1.98 or later, a C and C++ compiler, CMake, and libclang. It builds
-BoringSSL from source and uses the observer-enabled wreq fork pinned in `Cargo.lock`.
-The workspace patches the archiver and WARC crates to the local `../archivindex-warc` checkout,
-which must be present when building. This includes the experimental backend's HTTP/2 support.
+BoringSSL from source and uses the observer-enabled wreq fork pinned in `Cargo.lock`. The workspace
+also patches `btls`, `btls-sys`, and `tokio-btls` to the source revision required by that fork.
+The shared HTTP crates come from `archivindex`, and the archiver and WARC crates come from
+`archivindex-warc`. Both use `main`, with exact commits pinned in `Cargo.lock`. No local checkout
+of either repository is required.
 
 The `archive`, `resume-archive`, `complete-comments`, and `update-comments` commands then accept
 `--backend recorder|wreq` and `--profile NAME`, matching the archiver CLI. The profile defaults
@@ -67,7 +69,7 @@ profile. The wreq backend negotiates HTTP/2 over HTTPS with HTTP/1 fallback. HTT
 reconstructed for WARC storage and marked with `WARC-Protocol: h2`; HTTP/1 capture preserves wire
 bytes. It always uses the profile's `User-Agent`, ignoring the configuration file's `user-agent`
 setting. New `warcinfo` records use that profile value too. Other configured headers take precedence
-over profile headers.
+over profile headers. The `warcinfo` software field also identifies the wreq version and profile.
 
 To test a profile with wreq's normal protocol negotiation, including HTTP/2, use:
 
@@ -104,12 +106,12 @@ contain credentials, so supply it again when resuming or set it in the configura
 
 ## Development
 
-The workspace requires Rust 1.97 or later; the optional `wreq` feature requires Rust 1.98 and
-the native build tools listed above. Install the workspace policy checker with:
+The workspace requires Rust 1.98 or later; the optional `wreq` feature also requires the native
+build tools listed above. Install the workspace policy checker with:
 
 ```console
 cargo install --locked --git https://github.com/travisbrown/archivindex \
-  --rev f6e131cb8255090c5384f6cdcb099348247ad1ff cargo-archivindex-build
+  --rev e788abfd91c924d915175b32f3c453eba9ede4be cargo-archivindex-build
 ```
 
 Check the workspace policy, run its tests, and build its documentation with:

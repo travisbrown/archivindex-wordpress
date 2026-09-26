@@ -20,9 +20,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 archivindex-archiver.workspace = true
+archivindex-http.workspace = true
 archivindex-publication.workspace = true
-archivindex-warc = { workspace = true, features = ["gzip", "http"] }
-archivindex-warc-ops.workspace = true
+archivindex-warc = { workspace = true, features = ["gzip"] }
+archivindex-warc-linter.workspace = true
 archivindex-wordpress-model.workspace = true
 chrono.workspace = true
 serde.workspace = true

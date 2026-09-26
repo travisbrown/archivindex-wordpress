@@ -39,4 +39,6 @@ allow-git = [
   "https://github.com/travisbrown/archivindex-warc",
   # The experimental backend needs the unreleased connection observer API.
   "https://github.com/travisbrown/wreq",
+  # The fork requires unpublished btls APIs, pinned to the HTTP client's revision.
+  "https://github.com/0x676e67/btls",
 ]

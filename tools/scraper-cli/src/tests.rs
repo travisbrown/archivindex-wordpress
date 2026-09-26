@@ -13,7 +13,7 @@ use archivindex_warc::io::write::WarcWriter;
 use archivindex_warc::parse::raw;
 use archivindex_warc::record::extension::NoExtension;
 use archivindex_warc::record::{FieldsBlock, Record};
-use archivindex_warc_ops::lint::Severity;
+use archivindex_warc_linter::Severity;
 use archivindex_wordpress_scraper::CommentDriver;
 use archivindex_wordpress_scraper::archive::{
     ArchiveDriver, Checkpoint, DEFAULT_PER_PAGE, Resumption, Site,
@@ -644,7 +644,7 @@ fn every_archive_segment_name_has_a_numeric_timestamp() {
     let timestamp = name
         .strip_prefix("editorial-nightly-")
         .expect("the session prefix");
-    assert!(!timestamp.is_empty());
+    assert_ne!(timestamp, "");
     assert!(timestamp.bytes().all(|byte| byte.is_ascii_digit()));
 }
 
@@ -943,7 +943,7 @@ fn capture_commands_reject_invalid_proxies_before_fetching()
             wreq_args.extend(["--backend", "wreq"]);
             assert!(matches!(
                 super::run(Opts::try_parse_from(wreq_args)?),
-                Err(Error::Backend(_))
+                Err(Error::Proxy(_))
             ));
         }
         let result = super::run(Opts::try_parse_from(args)?);
@@ -1428,7 +1428,7 @@ fn an_archive_pages_each_exposed_collection_after_the_probes()
     assert!(std::fs::read(&warc)?.starts_with(b"WARC/"));
     let resume = inspect_archive(&warc)?;
     assert_eq!(resume.checkpoint, Checkpoint::Finished);
-    assert!(resume.warnings.is_empty());
+    assert!(resume.warnings.is_empty(), "{:?}", resume.warnings);
     assert_eq!(resume.before, Some(before()));
     assert_eq!(
         resume.endpoints[8..],
@@ -1520,7 +1520,7 @@ fn a_resumed_archive_continues_the_endpoint_via_its_last_page()
     );
     let resume = inspect_archive(directory.path().join("site-resumed.warc"))?;
     assert_eq!(resume.checkpoint, Checkpoint::Finished);
-    assert!(resume.warnings.is_empty());
+    assert!(resume.warnings.is_empty(), "{:?}", resume.warnings);
     assert_eq!(resume.before, Some(before()));
     assert!(
         resume
@@ -1557,7 +1557,7 @@ fn a_limited_archive_reports_problems_at_its_checkpoint() -> Result<(), Box<dyn 
         Checkpoint::Resume(resumption(Endpoint::Pages, 1, Some(2)))
     );
     assert_eq!(resume.before, Some(before()));
-    assert!(resume.warnings.is_empty());
+    assert!(resume.warnings.is_empty(), "{:?}", resume.warnings);
     assert!(
         resume
             .endpoints
@@ -1907,7 +1907,7 @@ fn wreq_uses_the_proxy_from_configuration_or_the_cli() -> Result<(), Box<dyn std
     };
     assert!(matches!(
         connection.build_archiver(connection.load()?),
-        Err(Error::Backend(_))
+        Err(Error::Proxy(_))
     ));
     connection.proxy = Some("socks5h://localhost:1080".to_owned());
     assert!(connection.build_archiver(connection.load()?).is_ok());
@@ -1915,7 +1915,7 @@ fn wreq_uses_the_proxy_from_configuration_or_the_cli() -> Result<(), Box<dyn std
     connection.proxy = Some("socks5h://localhost:invalid".to_owned());
     assert!(matches!(
         connection.build_archiver(connection.load()?),
-        Err(Error::Backend(_))
+        Err(Error::Proxy(_))
     ));
 
     Ok(())
@@ -1978,6 +1978,12 @@ fn wreq_uses_the_profile_user_agent_for_requests_and_warcinfo()
             assert_eq!(
                 fields.http_header_user_agent(),
                 Some(user_agents[0].as_str())
+            );
+            assert!(
+                fields
+                    .software()
+                    .expect("capture software")
+                    .ends_with(&format!("wreq/0.16.1 ({profile})"))
             );
         }
     }
@@ -2113,7 +2119,7 @@ fn wreq_test_reports_http_and_profile_errors_without_printing_a_body()
         panic!("expected an HTTP error");
     };
     assert_eq!(error.status().map(|status| status.as_u16()), Some(403));
-    assert!(output.is_empty());
+    assert!(output.is_empty(), "{output:?}");
     assert_eq!(server.finish().len(), 1);
 
     options.profile = "unknown-profile".to_owned();
@@ -2121,7 +2127,7 @@ fn wreq_test_reports_http_and_profile_errors_without_printing_a_body()
         super::wreq_test(&options, &mut output),
         Err(Error::Profile(_))
     ));
-    assert!(output.is_empty());
+    assert!(output.is_empty(), "{output:?}");
 
     Ok(())
 }

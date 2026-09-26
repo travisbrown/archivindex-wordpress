@@ -68,13 +68,13 @@ pub enum Error {
         source: warc_read::Error,
     },
     /// A WARC record could not be written.
-    #[error("cannot write completion WARC: {0}")]
+    #[error("cannot write completion WARC")]
     WarcWrite(#[from] warc_write::Error),
     /// Generated capture metadata could not be read or updated.
-    #[error("invalid generated capture metadata: {0}")]
+    #[error("invalid generated capture metadata")]
     CaptureMetadata(#[from] warc_record::fields::Error),
     /// A generated metadata record carried a malformed block digest.
-    #[error("invalid generated capture metadata digest: {0}")]
+    #[error("invalid generated capture metadata digest")]
     CaptureMetadataDigest(#[from] DigestError),
     /// A generated metadata record's block digest could not be recomputed.
     #[error("generated capture metadata has an unsupported or ambiguous block digest")]
@@ -83,7 +83,7 @@ pub enum Error {
     #[error("generated capture WARC record is not independently framed")]
     UnframedCaptureRecord,
     /// The HTTP capture could not be run.
-    #[error("cannot capture missing comment pages: {0}")]
+    #[error("cannot capture missing comment pages")]
     Archive(#[from] archivindex_archiver::Error),
     /// The input starts with something other than a `warcinfo` record.
     #[error("input WARC does not begin with a warcinfo record")]
@@ -421,8 +421,7 @@ struct CompletionOutput {
 
 impl CompletionOutput {
     fn new(output: &Path, warcinfo: &raw::Record) -> Result<Self, Error> {
-        let publication =
-            Publication::with_partial_path(output, partial_path(output), Policy::CreateNew)?;
+        let publication = Publication::with_partial_suffix(output, ".partial", Policy::CreateNew)?;
         let file = publication.reopen()?;
         let compression = if output
             .extension()
@@ -689,7 +688,14 @@ mod tests {
 
         for (name, expected_gzip) in [("output.warc", false), ("output.warc.gz", true)] {
             let output = directory.path().join(name);
-            CompletionOutput::new(&output, &source)?.publish()?;
+            let completion = CompletionOutput::new(&output, &source)?;
+            assert!(!output.exists());
+            assert_eq!(
+                is_gzip_file(&partial_path(&output))?,
+                expected_gzip,
+                "{name}"
+            );
+            completion.publish()?;
 
             assert_eq!(is_gzip_file(&output)?, expected_gzip, "{name}");
         }
@@ -869,7 +875,11 @@ mod tests {
             summary.requested_urls,
             [format!("http://{authority}{expected_target}")]
         );
-        assert!(summary.uncaptured_pages.is_empty());
+        assert!(
+            summary.uncaptured_pages.is_empty(),
+            "{:?}",
+            summary.uncaptured_pages
+        );
         assert!(summary.is_complete());
         assert_eq!(requests, [("GET".to_owned(), expected_target.to_owned())]);
 

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Read};
 use std::path::Path;
 
+use archivindex_http::message::ResponseMetadata;
 use archivindex_warc::io::read::{self as warc_read, WarcReader};
 use archivindex_warc::record::extension::NoExtension;
 use archivindex_warc::record::{Record, payload};
@@ -139,7 +140,7 @@ pub enum Error {
         url: String,
         /// The payload extraction failure.
         #[source]
-        source: archivindex_warc::record::payload::Error,
+        source: archivindex_http::body::Error,
     },
     /// A successful comments response is not a JSON array.
     #[error("invalid WordPress comments JSON for {url}")]
@@ -341,7 +342,7 @@ fn collect_records<R: BufRead>(
             continue;
         }
 
-        let response = archivindex_warc::record::http::ResponseMetadata::parse(&body)
+        let response = ResponseMetadata::parse(&body)
             .ok_or_else(|| Error::InvalidResponse { url: url.clone() })?;
 
         if !(200..300).contains(&response.status) {
@@ -442,7 +443,7 @@ fn collect_update_context<R: BufRead>(
         let Some(body) = response_body else {
             continue;
         };
-        let response = archivindex_warc::record::http::ResponseMetadata::parse(&body)
+        let response = ResponseMetadata::parse(&body)
             .ok_or_else(|| Error::InvalidResponse { url: url.clone() })?;
         if !(200..300).contains(&response.status) {
             continue;
@@ -524,9 +525,7 @@ fn parse_comment_datetime(value: &str) -> Option<DateTime<Utc>> {
 ///
 /// Completion planning uses this same predicate, so it cannot choose a paging template from a
 /// record the coverage check would reject or overlook an acceptable revisit.
-pub(crate) fn qualifying_comment_capture(
-    record: &Record,
-) -> Option<(&str, archivindex_warc::record::http::ResponseMetadata)> {
+pub(crate) fn qualifying_comment_capture(record: &Record) -> Option<(&str, ResponseMetadata<'_>)> {
     let (url, payload, body) = match record {
         Record::Response { header, body } => {
             (header.target_uri.as_str(), &header.payload, body.as_slice())
@@ -544,7 +543,7 @@ pub(crate) fn qualifying_comment_capture(
     {
         return None;
     }
-    let response = archivindex_warc::record::http::ResponseMetadata::parse(body)?;
+    let response = ResponseMetadata::parse(body)?;
 
     (response.status == 200).then_some((url, response))
 }
@@ -944,7 +943,11 @@ mod tests {
         let coverage = check_comment_completeness(path)?;
 
         assert_eq!(coverage.total_pages, None);
-        assert!(coverage.advertised_page_totals.is_empty());
+        assert!(
+            coverage.advertised_page_totals.is_empty(),
+            "{:?}",
+            coverage.advertised_page_totals
+        );
         assert_eq!(coverage.captured_pages, [1]);
         assert_eq!(coverage.missing_page_count(), None);
         assert!(!coverage.is_complete());

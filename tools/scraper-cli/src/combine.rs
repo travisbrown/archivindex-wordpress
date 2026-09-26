@@ -47,7 +47,7 @@ pub struct CombineSummary {
 /// The ways archive segments can fail to combine.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("cannot read combine input directory {}: {source}", path.display())]
+    #[error("cannot read combine input directory {}", path.display())]
     InputDirectory {
         path: PathBuf,
         #[source]
@@ -61,31 +61,31 @@ pub enum Error {
         "cannot redirect later warcinfo records because the first warcinfo has no WARC-Record-ID"
     )]
     MissingFirstWarcinfoRecordId,
-    #[error("cannot create combined output {}: {source}", path.display())]
+    #[error("cannot create combined output {}", path.display())]
     OutputCreate {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("cannot inspect archive segment {}: {source}", path.display())]
+    #[error("cannot inspect archive segment {}", path.display())]
     InspectInput {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("cannot read archive segment {}: {source}", path.display())]
+    #[error("cannot read archive segment {}", path.display())]
     ReadInput {
         path: PathBuf,
         #[source]
         source: archivindex_warc::io::read::Error,
     },
-    #[error("cannot write combined output {}: {source}", path.display())]
+    #[error("cannot write combined output {}", path.display())]
     WriteOutput {
         path: PathBuf,
         #[source]
         source: archivindex_warc::io::write::Error,
     },
-    #[error("cannot flush combined output {}: {source}", path.display())]
+    #[error("cannot flush combined output {}", path.display())]
     FlushOutput {
         path: PathBuf,
         #[source]

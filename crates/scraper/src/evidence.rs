@@ -8,8 +8,9 @@
 
 use std::collections::HashMap;
 
+use archivindex_http::message::ResponseMetadata;
 use archivindex_warc::record::header::RevisitProfile;
-use archivindex_warc::record::{FieldsBlock, Record, http};
+use archivindex_warc::record::{FieldsBlock, Record};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct CaptureGroup {
@@ -28,8 +29,8 @@ pub struct StoredResponse {
 
 impl StoredResponse {
     /// Interpret the HTTP head without decoding the entity body.
-    pub fn metadata(&self) -> Option<http::ResponseMetadata> {
-        http::ResponseMetadata::parse(&self.body)
+    pub fn metadata(&self) -> Option<ResponseMetadata<'_>> {
+        ResponseMetadata::parse(&self.body)
     }
 }
 
@@ -382,7 +383,7 @@ mod tests {
         ]
         .concat();
         let (evidence, problems) = observe_both(&archive);
-        assert!(problems.is_empty());
+        assert!(problems.is_empty(), "{problems:?}");
         for (index, original) in [(1, Some(0)), (2, None)] {
             let revisit = evidence.groups[index]
                 .response

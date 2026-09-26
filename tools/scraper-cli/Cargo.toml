@@ -20,13 +20,15 @@ doc = false
 # Compile SQLite from source rather than linking the system library.
 bundled = ["archivindex-archiver/bundled"]
 # Browser-derived TLS emulation. Requires Rust 1.98 and builds BoringSSL from source.
-wreq = ["dep:archivindex-archiver-backend-wreq", "dep:tokio", "dep:wreq"]
+wreq = ["dep:archivindex-http-client", "archivindex-http-client/wreq", "dep:tokio", "dep:wreq"]
 
 [dependencies]
 archivindex-archiver.workspace = true
-archivindex-archiver-backend-wreq = { workspace = true, optional = true }
 archivindex-cli-support.workspace = true
+archivindex-http-client = { workspace = true, optional = true }
+archivindex-http-client-challenge.workspace = true
 archivindex-warc = { workspace = true, features = ["gzip"] }
+archivindex-warc-linter.workspace = true
 archivindex-warc-ops.workspace = true
 archivindex-wordpress-scraper.workspace = true
 chrono.workspace = true

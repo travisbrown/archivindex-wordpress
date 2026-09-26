@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
+use archivindex_http::message::ResponseMetadata;
 use archivindex_warc::io::read::WarcReader;
-use archivindex_warc::record::{Record, http, payload};
-use archivindex_warc_ops::lint::{Custom, Finding, Findings, Linter, Rule, Severity, Violation};
+use archivindex_warc::record::{Record, payload};
+use archivindex_warc_linter::{Custom, Finding, Findings, Linter, Rule, Severity, Violation};
 use serde_json::Value;
 use url::Url;
 
@@ -76,7 +77,7 @@ impl LintReport {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The input file could not be opened or read.
-    #[error("cannot read {}: {source}", path.display())]
+    #[error("cannot read {}", path.display())]
     Io {
         /// Path that was being read.
         path: PathBuf,
@@ -85,7 +86,7 @@ pub enum Error {
         source: std::io::Error,
     },
     /// A WARC record is syntactically or semantically invalid.
-    #[error("cannot read a WARC record from {}: {source}", path.display())]
+    #[error("cannot read a WARC record from {}", path.display())]
     Warc {
         /// Path that was being read.
         path: PathBuf,
@@ -97,7 +98,7 @@ pub enum Error {
     #[error("{} contains no WordPress REST API requests", .0.display())]
     NoWordPressRequests(PathBuf),
     /// The inferred installation URL is invalid.
-    #[error("cannot infer a WordPress site from {url:?}: {source}")]
+    #[error("cannot infer a WordPress site from {url:?}")]
     Site {
         /// Request URI used for inference.
         url: String,
@@ -109,7 +110,7 @@ pub enum Error {
 
 /// Lint a plain or gzip-compressed `WordPress` collection WARC.
 ///
-/// One pass checks the file against the rules of [`archivindex_warc_ops::lint`] and the `WordPress`
+/// One pass checks the file against the rules of [`archivindex_warc_linter`] and the `WordPress`
 /// rules below. The archive must begin with all API roots and known probes, followed by
 /// registry-advertised custom probes. Every successful probe must have one correctly linked
 /// pagination traversal. Legacy second passes are also checked when the collection spans more
@@ -993,7 +994,7 @@ fn lint_page_capture(
 fn check_json_array(
     groups: &[CaptureGroup],
     group: usize,
-    metadata: &http::ResponseMetadata,
+    metadata: &ResponseMetadata<'_>,
     name: &str,
     pass: &str,
     page: usize,
@@ -1022,7 +1023,7 @@ fn check_json_array(
 fn check_probe_response(
     groups: &[CaptureGroup],
     group: usize,
-    metadata: &http::ResponseMetadata,
+    metadata: &ResponseMetadata<'_>,
     name: &str,
     report: &mut Analysis,
 ) {
@@ -1092,7 +1093,7 @@ fn resolved_payload(groups: &[CaptureGroup], mut group: usize) -> ResolvedPayloa
 
 fn check_header_links(
     group: &CaptureGroup,
-    metadata: &http::ResponseMetadata,
+    metadata: &ResponseMetadata<'_>,
     page: usize,
     total: Option<usize>,
     name: &str,
@@ -1196,7 +1197,7 @@ fn page_uri_match(candidate: &str, current: &str, expected_page: usize) -> PageU
     }
 }
 
-fn response_metadata(group: &CaptureGroup) -> Option<http::ResponseMetadata> {
+fn response_metadata(group: &CaptureGroup) -> Option<ResponseMetadata<'_>> {
     group.response.as_ref().and_then(StoredResponse::metadata)
 }
 
@@ -1228,7 +1229,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-fn numeric_header(metadata: &http::ResponseMetadata, name: &str) -> Option<usize> {
+fn numeric_header(metadata: &ResponseMetadata<'_>, name: &str) -> Option<usize> {
     metadata
         .header(name)
         .and_then(|value| std::str::from_utf8(value).ok())

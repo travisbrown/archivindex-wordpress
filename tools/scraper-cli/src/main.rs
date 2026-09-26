@@ -21,7 +21,7 @@ use archivindex_archiver::session::{
 use archivindex_archiver::{Archiver, Config};
 use archivindex_cli_support::progress::{bar, spinner};
 use archivindex_cli_support::{CommandOutcome, Verbosity, config, exit_code, interrupt_flag};
-use archivindex_warc_ops::lint::Severity;
+use archivindex_warc_linter::Severity;
 use archivindex_wordpress_scraper::archive::{
     ArchiveDriver, Checkpoint, DEFAULT_PER_PAGE, PaginationProgress, Site,
 };
@@ -72,7 +72,7 @@ fn run(opts: Opts) -> Result<CommandOutcome, Error> {
 /// Download the API root with the profile's normal wreq transport and headers.
 #[cfg(feature = "wreq")]
 fn wreq_test(options: &WreqTestOptions, mut output: impl Write) -> Result<CommandOutcome, Error> {
-    let profile = archivindex_archiver_backend_wreq::parse_profile(&options.profile)?;
+    let profile = archivindex_http_client::wreq::parse_profile(&options.profile)?;
     let url = options.base.root().join("wp-json")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1310,27 +1310,27 @@ fn page_total_change_warning(coverage: &CommentCompleteness) -> Option<String> {
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
-    #[error("I/O error: {0}")]
+    #[error("I/O error")]
     Io(#[from] std::io::Error),
-    #[error("invalid WordPress base URL: {0}")]
+    #[error("invalid WordPress base URL")]
     Url(#[from] url::ParseError),
-    #[error("invalid cookie: {0}")]
-    Cookie(#[from] archivindex_archiver::CookieError),
-    #[error("archiving error: {0}")]
+    #[error("invalid cookie")]
+    Cookie(#[from] archivindex_http_client_challenge::cookies::Error),
+    #[error("archiving error")]
     Archive(#[from] archivindex_archiver::Error),
-    #[error("invalid archiver configuration: {0}")]
+    #[error("invalid archiver configuration")]
     Config(#[from] archivindex_archiver::ConfigError),
     #[cfg(feature = "wreq")]
-    #[error("cannot configure wreq backend: {0}")]
-    Backend(#[from] archivindex_archiver::backend::Error),
+    #[error("cannot configure wreq backend")]
+    Proxy(#[from] archivindex_http_client::InvalidProxy),
     #[cfg(feature = "wreq")]
     #[error(transparent)]
-    Profile(#[from] archivindex_archiver_backend_wreq::UnknownProfile),
+    Profile(#[from] archivindex_http_client::wreq::UnknownProfile),
     #[cfg(feature = "wreq")]
     #[error("wreq profile {0} has no valid User-Agent")]
     ProfileUserAgent(String),
     #[cfg(feature = "wreq")]
-    #[error("wreq request failed: {0}")]
+    #[error("wreq request failed")]
     Wreq(#[from] wreq::Error),
     #[error(transparent)]
     ConfigFile(#[from] config::Error),
@@ -1338,17 +1338,17 @@ enum Error {
     UserAgent(#[from] archivindex_archiver::UserAgentError),
     #[error(transparent)]
     SessionId(#[from] archivindex_archiver::session::SessionIdError),
-    #[error("WordPress comment reading error: {0}")]
+    #[error("WordPress comment reading error")]
     ReadComments(#[from] archivindex_wordpress_scraper::read::Error),
-    #[error("WordPress comment completion error: {0}")]
+    #[error("WordPress comment completion error")]
     CompleteComments(#[from] archivindex_wordpress_scraper::complete::Error),
-    #[error("WordPress archive resume inspection error: {0}")]
+    #[error("WordPress archive resume inspection error")]
     ResumeInfo(#[from] archivindex_wordpress_scraper::resume::Error),
-    #[error("WordPress archive lint error: {0}")]
+    #[error("WordPress archive lint error")]
     Lint(#[from] archivindex_wordpress_scraper::lint::Error),
     #[error(transparent)]
     Combine(#[from] combine::Error),
-    #[error("cannot read archive session directory {}: {source}", path.display())]
+    #[error("cannot read archive session directory {}", path.display())]
     SessionDirectory {
         path: PathBuf,
         #[source]
@@ -1386,7 +1386,7 @@ enum Error {
     },
     #[error("cannot derive an archive session name from {}", .0.display())]
     SessionName(PathBuf),
-    #[error("cannot read comment update input {}: {source}", path.display())]
+    #[error("cannot read comment update input {}", path.display())]
     UpdateInputRead {
         path: PathBuf,
         #[source]
@@ -1394,7 +1394,7 @@ enum Error {
     },
     #[error("comment update directory {} contains no direct .warc or .warc.gz files", .0.display())]
     NoUpdateWarcs(PathBuf),
-    #[error("cannot derive a comment update from {}: {source}", path.display())]
+    #[error("cannot derive a comment update from {}", path.display())]
     UpdateAnchor {
         path: PathBuf,
         #[source]
@@ -1426,7 +1426,7 @@ enum Error {
         after: chrono::DateTime<Utc>,
         before: chrono::DateTime<Utc>,
     },
-    #[error("JSON writing error: {0}")]
+    #[error("JSON writing error")]
     Json(#[from] serde_json::Error),
 }
 
@@ -1545,7 +1545,7 @@ impl ConnectionOptions {
         if self.backend == Backend::Wreq {
             use wreq::IntoEmulation as _;
 
-            let profile = archivindex_archiver_backend_wreq::parse_profile(&self.profile)?;
+            let profile = archivindex_http_client::wreq::parse_profile(&self.profile)?;
             // Keep the sent header and WARC metadata consistent with the selected profile.
             let config = Config {
                 user_agent: profile
@@ -1557,7 +1557,8 @@ impl ConnectionOptions {
                     .to_owned(),
                 ..config
             };
-            let backend = archivindex_archiver_backend_wreq::WreqBackend::new(profile)
+            let backend = archivindex_http_client::wreq::WreqClient::new(profile)
+                .http2(true)
                 .proxy(config.proxy.as_deref())?
                 .connect_timeout(Some(config.timeout))
                 .io_timeout(Some(config.timeout))
