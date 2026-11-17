@@ -12,7 +12,7 @@ use archivindex_archiver::session::{Capture, Driver};
 use archivindex_warc::io::read::WarcReader;
 use archivindex_warc::record::extension::NoExtension;
 use archivindex_warc::record::payload;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use url::Url;
 
 use crate::archive::{ArchiveDriver, Checkpoint, ProbeResult, Resumption, Site, SiteError};
@@ -25,7 +25,7 @@ pub struct ResumeInfo {
     /// The `WordPress` installation whose resources the WARC captures.
     pub site: Site,
     /// The fixed archive cutoff, when at least one paginated request records it.
-    pub before: Option<DateTime<Utc>>,
+    pub before: Option<Timestamp>,
     /// The last checkpoint backed by a complete capture group.
     pub checkpoint: Checkpoint,
     /// Supported and custom collections in their final probing order.
@@ -117,7 +117,7 @@ pub fn inspect_archive_with_config(
 pub fn inspect_archive_with_restored_probes(
     path: impl AsRef<Path>,
     probes: &[ProbeResult],
-    before: Option<DateTime<Utc>>,
+    before: Option<Timestamp>,
 ) -> Result<ResumeInfo, Error> {
     inspect_archive_with_restored_probes_and_config(path, probes, before, |driver| driver)
 }
@@ -130,7 +130,7 @@ pub fn inspect_archive_with_restored_probes(
 pub fn inspect_archive_with_restored_probes_and_config(
     path: impl AsRef<Path>,
     probes: &[ProbeResult],
-    before: Option<DateTime<Utc>>,
+    before: Option<Timestamp>,
     configure: impl FnOnce(ArchiveDriver) -> ArchiveDriver,
 ) -> Result<ResumeInfo, Error> {
     let path = path.as_ref();
@@ -180,7 +180,7 @@ fn inspect_reader<R: BufRead>(
     reader: WarcReader<R>,
     path: &Path,
     restored_probes: &[ProbeResult],
-    restored_before: Option<DateTime<Utc>>,
+    restored_before: Option<Timestamp>,
     configure: impl FnOnce(ArchiveDriver) -> ArchiveDriver,
 ) -> Result<ResumeInfo, Error> {
     let (groups, mut warnings) = collect_groups(reader, path)?;
@@ -197,8 +197,7 @@ fn inspect_reader<R: BufRead>(
             .any(|candidate| candidate != before)
     {
         warnings.push(format!(
-            "paginated requests contain conflicting before cutoffs; using {}",
-            before.to_rfc3339()
+            "paginated requests contain conflicting before cutoffs; using {before}"
         ));
     }
     let custom = custom_collections(&groups, &site, &mut warnings);
@@ -206,9 +205,7 @@ fn inspect_reader<R: BufRead>(
         .iter()
         .find(|group| belongs_to_site(&group.url, &site))
         .ok_or_else(|| Error::NoWordPressRequests(path.to_owned()))?;
-    let before_or_epoch = before
-        .or(restored_before)
-        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+    let before_or_epoch = before.or(restored_before).unwrap_or(Timestamp::UNIX_EPOCH);
     let driver = if restored_probes.is_empty() || first.url == format!("{}wp-json", site.root()) {
         initial_driver(first, &groups, site.clone(), before_or_epoch, &custom)?
     } else {
@@ -288,13 +285,12 @@ fn belongs_to_site(request: &str, site: &Site) -> bool {
         && request[site.root().as_str().len()..].starts_with("wp-json")
 }
 
-fn cutoff(request: &str) -> Option<DateTime<Utc>> {
+fn cutoff(request: &str) -> Option<Timestamp> {
     Url::parse(request)
         .ok()?
         .query_pairs()
         .find_map(|(name, value)| (name == "before").then_some(value))
-        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
-        .map(|value| value.with_timezone(&Utc))
+        .and_then(|value| value.parse::<Timestamp>().ok())
 }
 
 fn custom_collections(
@@ -378,7 +374,7 @@ fn initial_driver(
     first: &CaptureGroup,
     groups: &[CaptureGroup],
     site: Site,
-    before: DateTime<Utc>,
+    before: Timestamp,
     custom: &[Collection],
 ) -> Result<ArchiveDriver, Error> {
     if first.url == format!("{}wp-json", site.root()) {

@@ -1,6 +1,6 @@
 //! Media attachment resources.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -179,7 +179,7 @@ impl<'de> Deserialize<'de> for Media {
 impl Media {
     /// The publication time, from the API's UTC field.
     #[must_use]
-    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+    pub fn timestamp(&self) -> Option<Timestamp> {
         self.publication.timestamp()
     }
 }

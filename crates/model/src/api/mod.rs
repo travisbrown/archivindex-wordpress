@@ -1,6 +1,8 @@
 //! Models for the `WordPress` REST API.
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use jiff::Timestamp;
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
 use serde::{Deserialize, Serialize};
 
 pub mod discovery;
@@ -21,15 +23,18 @@ pub struct Rendered {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicationDates {
-    pub date: Option<NaiveDateTime>,
-    pub date_gmt: Option<NaiveDateTime>,
+    pub date: Option<DateTime>,
+    pub date_gmt: Option<DateTime>,
 }
 
 impl PublicationDates {
     /// The publication time, from the UTC field.
+    ///
+    /// Returns `None` if the field is absent or outside the supported timestamp range.
     #[must_use]
-    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
-        self.date_gmt.map(|value| Utc.from_utc_datetime(&value))
+    pub fn timestamp(&self) -> Option<Timestamp> {
+        self.date_gmt
+            .and_then(|value| Offset::UTC.to_timestamp(value).ok())
     }
 }
 
@@ -37,8 +42,8 @@ impl PublicationDates {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModificationDates {
-    pub modified: Option<NaiveDateTime>,
-    pub modified_gmt: Option<NaiveDateTime>,
+    pub modified: Option<DateTime>,
+    pub modified_gmt: Option<DateTime>,
 }
 
 /// A GMT offset represented as a JSON number or string.
@@ -60,6 +65,50 @@ mod tests {
     use super::discovery::{ApiRoot, Authentication, ErrorResponse, Namespace, Taxonomy, Type};
     use super::media::{Media, MediaType};
     use super::resource::{DiscussionStatus, Post, PostFormat};
+    use super::{ModificationDates, PublicationDates};
+
+    #[test]
+    fn resource_dates_preserve_civil_times_and_use_the_gmt_field()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let publication = json!({
+            "date": "2026-08-28T23:57:06.123456789",
+            "date_gmt": "2026-08-28T21:57:06.123456789"
+        });
+        let dates: PublicationDates = serde_json::from_value(publication.clone())?;
+        assert_eq!(serde_json::to_value(dates)?, publication);
+        assert_eq!(
+            dates.timestamp(),
+            Some("2026-08-28T21:57:06.123456789Z".parse()?)
+        );
+
+        let modification = json!({
+            "modified": "2026-08-29T00:15:00",
+            "modified_gmt": "2026-08-28T22:15:00"
+        });
+        let dates: ModificationDates = serde_json::from_value(modification.clone())?;
+        assert_eq!(serde_json::to_value(dates)?, modification);
+        Ok(())
+    }
+
+    #[test]
+    fn publication_times_require_a_representable_gmt_field()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for value in [
+            json!({}),
+            json!({"date": "2026-08-28T23:57:06", "date_gmt": null}),
+            json!({"date_gmt": "9999-12-31T23:59:59"}),
+        ] {
+            let dates: PublicationDates = serde_json::from_value(value)?;
+            assert_eq!(dates.timestamp(), None);
+        }
+        assert!(
+            serde_json::from_value::<PublicationDates>(json!({
+                "date_gmt": "2026-02-30T12:00:00"
+            }))
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn bounded_string_fields_parse_as_enums() {
@@ -240,8 +289,8 @@ mod tests {
             serde_json::from_value::<Media>(media_attachment()).expect("a media attachment");
 
         assert_eq!(
-            media.timestamp().expect("a timestamp").to_rfc3339(),
-            "2026-08-28T21:57:06+00:00"
+            media.timestamp().expect("a timestamp").to_string(),
+            "2026-08-28T21:57:06Z"
         );
         assert_eq!(media.jetpack, None);
     }

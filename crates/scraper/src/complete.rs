@@ -583,7 +583,7 @@ mod tests {
     use archivindex_warc::io::write::WarcWriter;
     use archivindex_warc::record::Record;
     use archivindex_warc::value::MediaType;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     use super::{
         CompletionOutput, MetadataBody, PagingUrl, RequestDelay, complete_comments,
@@ -683,7 +683,7 @@ mod tests {
     fn completion_compression_follows_the_output_filename() -> Result<(), Box<dyn std::error::Error>>
     {
         let directory = tempfile::tempdir()?;
-        let source: Record = Record::warcinfo(Utc::now()).build();
+        let source: Record = Record::warcinfo(Timestamp::now()).build();
         let source = source.into_raw()?;
 
         for (name, expected_gzip) in [("output.warc", false), ("output.warc.gz", true)] {
@@ -708,7 +708,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("output.warc.gz");
-        let source: Record = Record::warcinfo(Utc::now()).build();
+        let source: Record = Record::warcinfo(Timestamp::now()).build();
         let source = source.into_raw()?;
         drop(CompletionOutput::new(&output, &source)?);
         assert!(!output.exists());
@@ -745,7 +745,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let captures = directory.path().join("captures.warc");
         let output = directory.path().join("output.warc");
-        let source: Record = Record::warcinfo(Utc::now())
+        let source: Record = Record::warcinfo(Timestamp::now())
             .filename("source.warc")?
             .build();
         let source = source.into_raw()?;
@@ -757,11 +757,11 @@ mod tests {
             .to_vec();
 
         let mut capture_writer = WarcWriter::new(std::fs::File::create(&captures)?);
-        let generated: Record = Record::warcinfo(Utc::now()).build();
+        let generated: Record = Record::warcinfo(Timestamp::now()).build();
         capture_writer.write(&generated.into_raw()?)?;
-        let response: Record = Record::response("https://example.com/page=2", Utc::now())?
+        let response: Record = Record::response("https://example.com/page=2", Timestamp::now())?
             .body(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n".to_vec())?;
-        let metadata: Record = Record::metadata(Utc::now())
+        let metadata: Record = Record::metadata(Timestamp::now())
             .target_uri(response.target_uri().expect("response target").clone())
             .concurrent_to(response.core().record_id.clone())
             .fetch_time_ms(Duration::from_millis(1))
@@ -840,7 +840,7 @@ mod tests {
         let input = directory.path().join("input.warc");
         let output = directory.path().join("output.warc");
         let mut writer = WarcWriter::new(std::fs::File::create(&input)?);
-        let warcinfo: Record = Record::warcinfo(Utc::now())
+        let warcinfo: Record = Record::warcinfo(Timestamp::now())
             .filename("original.warc")?
             .build();
         let warcinfo = warcinfo.into_raw()?;
@@ -858,7 +858,7 @@ mod tests {
             );
             let response = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
                 x-wp-totalpages: 3\r\ncontent-length: 2\r\n\r\n[]";
-            let record: Record = Record::response(&url, Utc::now())?
+            let record: Record = Record::response(&url, Timestamp::now())?
                 .identified_payload_type(MediaType::parse(b"application/json")?)
                 .body(response.to_vec())?;
             writer.write(&record.into_raw()?)?;

@@ -31,14 +31,15 @@ archivindex-warc = { workspace = true, features = ["gzip"] }
 archivindex-warc-linter.workspace = true
 archivindex-warc-ops.workspace = true
 archivindex-wordpress-scraper.workspace = true
-chrono.workspace = true
 clap.workspace = true
-humantime.workspace = true
 indicatif.workspace = true
+jiff.workspace = true
 log.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
+# Forward this CLI's log events through the shared tracing subscriber.
+tracing-subscriber.workspace = true
 url.workspace = true
 wreq = { workspace = true, optional = true, features = ["gzip", "brotli", "deflate", "zstd"] }
 

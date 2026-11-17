@@ -37,9 +37,9 @@ use archivindex_wordpress_scraper::resume::{
     inspect_archive, inspect_archive_with_config, inspect_archive_with_restored_probes_and_config,
 };
 use archivindex_wordpress_scraper::{CommentDriver, CommentProgress};
-use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
+use jiff::Timestamp;
 
 use crate::combine::{CombineOptions, combine_archives};
 use crate::sessions::{SegmentName, SessionInventory};
@@ -158,7 +158,7 @@ fn lint_wp_archive(options: &LintOptions, quiet: bool) -> Result<CommandOutcome,
 
 /// Archive every supported collection a site exposes, beginning with the API roots and probes.
 fn archive_site(options: &ArchiveRunOptions, quiet: bool) -> Result<CommandOutcome, Error> {
-    let before = Utc::now();
+    let before = Timestamp::now();
     let session = options
         .session_name
         .clone()
@@ -325,7 +325,7 @@ fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcom
 fn run_archive(
     driver: ArchiveDriver,
     options: &ArchiveRunOptions,
-    before: DateTime<Utc>,
+    before: Timestamp,
     quiet: bool,
 ) -> Result<CommandOutcome, Error> {
     let archive_session = options
@@ -340,14 +340,14 @@ fn run_archive(
 fn run_archive_for_session(
     driver: ArchiveDriver,
     options: &ArchiveRunOptions,
-    before: DateTime<Utc>,
+    before: Timestamp,
     quiet: bool,
     archive_session: &str,
 ) -> Result<CommandOutcome, Error> {
     let session_name = options
         .session_name
         .clone()
-        .unwrap_or_else(|| options.base.session_name(Utc::now()));
+        .unwrap_or_else(|| options.base.session_name(Timestamp::now()));
     std::fs::create_dir_all(&options.output)?;
     let output = options.output.join(format!("{session_name}.warc"));
     // The directory accumulates one plain WARC per run, to be merged later.
@@ -554,7 +554,7 @@ fn report_resume_warnings(path: &Path, warnings: &[String]) {
 
 /// The stable default prefix shared by every run segment for a site.
 fn default_session_prefix(site: &Site) -> String {
-    site.session_name(DateTime::<Utc>::UNIX_EPOCH)
+    site.session_name(Timestamp::UNIX_EPOCH)
         .strip_suffix("-0")
         .expect("the epoch session name ends in -0")
         .to_owned()
@@ -644,7 +644,7 @@ fn resume_command(
     session_name: &str,
     connection: &ConnectionOptions,
     revisit_index: Option<&Path>,
-    before: Option<DateTime<Utc>>,
+    before: Option<Timestamp>,
     per_page: &PerPageOptions,
 ) -> String {
     let mut command = format!(
@@ -670,9 +670,7 @@ fn resume_command(
     }
     if let Some(before) = before {
         command.push_str(" --before ");
-        command.push_str(&shell_word(
-            &before.to_rfc3339_opts(SecondsFormat::Secs, true),
-        ));
+        command.push_str(&shell_word(&format!("{before:.0}")));
     }
     let default_per_page = per_page.default_value();
     if default_per_page != DEFAULT_PER_PAGE {
@@ -758,26 +756,22 @@ impl Driver for ArchiveRunState {
 /// Capture comments from a window that overlaps each site's latest archived comment time.
 fn update_comments(options: &UpdateCommentsOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let updates = comment_update_inputs(&options.input)?;
-    let before = Utc::now();
-    let overlap = chrono::Duration::from_std(options.overlap)
-        .map_err(|_| Error::OverlapOutOfRange(options.overlap))?;
+    let before = Timestamp::now();
     let runs = updates
         .into_iter()
         .map(|update| {
             let after = update
                 .anchor
                 .datetime
-                .checked_sub_signed(overlap)
-                .ok_or(Error::OverlapOutOfRange(options.overlap))?;
+                .checked_sub(options.overlap)
+                .map_err(|_| Error::OverlapOutOfRange(options.overlap))?;
             if after >= before {
                 return Err(Error::InvalidUpdateWindow { after, before });
             }
             log::info!(
-                "updating {} comments from {} after {} and before {} (anchor from {})",
+                "updating {} comments from {} after {after} and before {before} (anchor from {})",
                 update.anchor.base_url,
                 update.path.display(),
-                after.to_rfc3339(),
-                before.to_rfc3339(),
                 if update.anchor.from_comment {
                     "latest comment"
                 } else {
@@ -1381,8 +1375,8 @@ enum Error {
     )]
     SessionCutoffMismatch {
         path: PathBuf,
-        expected: DateTime<Utc>,
-        actual: DateTime<Utc>,
+        expected: Timestamp,
+        actual: Timestamp,
     },
     #[error("cannot derive an archive session name from {}", .0.display())]
     SessionName(PathBuf),
@@ -1422,10 +1416,7 @@ enum Error {
     #[error("comment update overlap is out of range: {0:?}")]
     OverlapOutOfRange(Duration),
     #[error("comment update window starts at {after}, which is not before {before}")]
-    InvalidUpdateWindow {
-        after: chrono::DateTime<Utc>,
-        before: chrono::DateTime<Utc>,
-    },
+    InvalidUpdateWindow { after: Timestamp, before: Timestamp },
     #[error("JSON writing error")]
     Json(#[from] serde_json::Error),
 }
@@ -1629,7 +1620,7 @@ struct ResumeArchiveOptions {
     session_name: String,
     /// Original archive cutoff, required if the initial segment has no paginated request.
     #[arg(long, value_name = "TIMESTAMP")]
-    before: Option<DateTime<Utc>>,
+    before: Option<Timestamp>,
     /// Persistent payload-revisit and conditional-request state database.
     #[arg(long)]
     revisit_index: Option<PathBuf>,
@@ -1706,7 +1697,7 @@ struct UpdateCommentsOptions {
     #[arg(long)]
     session_name: String,
     /// Begin this far before each site's latest comment time, or its archived cutoff if no
-    /// comment has a valid time.
+    /// comment has a valid time. Days are 24 hours; months and years are not supported.
     #[arg(long, default_value = "1day", value_parser = parse_duration)]
     overlap: Duration,
     /// Persistent payload-revisit and conditional-request state database.
@@ -1724,7 +1715,11 @@ struct UpdateCommentsOptions {
 }
 
 fn parse_duration(value: &str) -> Result<Duration, String> {
-    humantime::parse_duration(value).map_err(|error| error.to_string())
+    value
+        .parse::<jiff::Span>()
+        .and_then(|span| span.to_duration(jiff::SpanRelativeTo::days_are_24_hours()))
+        .and_then(Duration::try_from)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

@@ -22,10 +22,10 @@ use archivindex_wordpress_scraper::endpoint::{Collection, Endpoint, Registry};
 use archivindex_wordpress_scraper::lint::lint_archive;
 use archivindex_wordpress_scraper::read::{CommentCompleteness, check_comment_collections};
 use archivindex_wordpress_scraper::resume::{inspect_archive, inspect_archive_with_config};
-use chrono::{DateTime, Utc};
 use clap::{CommandFactory, Parser};
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use jiff::Timestamp;
 
 use super::{
     ArchiveProgress, ArchiveRunOptions, ArchiveRunState, CheckCommentsOptions, CombineOptions,
@@ -38,10 +38,8 @@ use super::{
 
 const BEFORE: &str = "2026-08-20T00:00:00Z";
 
-fn before() -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(BEFORE)
-        .map(|date| date.with_timezone(&Utc))
-        .expect("a test timestamp")
+fn before() -> Timestamp {
+    BEFORE.parse::<Timestamp>().expect("a test timestamp")
 }
 
 fn resumption(
@@ -167,7 +165,8 @@ fn write_update_warc_batches(
                  content-length: {}\r\n\r\n{body}",
             body.len()
         );
-        let record: Record = Record::response(&url, Utc::now())?.body(message.into_bytes())?;
+        let record: Record =
+            Record::response(&url, Timestamp::now())?.body(message.into_bytes())?;
         writer.write(&record.into_raw()?)?;
     }
     writer.flush()?;
@@ -704,7 +703,7 @@ fn recorded_capture(
     CaptureSummary {
         url: url.to_owned(),
         origin: archivindex_archiver::capture::Origin::Seed,
-        date: before(),
+        date: jiff::tz::Offset::UTC.to_datetime(before()),
         status: 200,
         size: 2,
         redirects: 0,
@@ -1158,6 +1157,64 @@ fn update_command_parses_a_configured_overlap() {
 }
 
 #[test]
+fn overlap_durations_use_fixed_days_and_preserve_subseconds() {
+    for (input, expected) in [
+        ("1day", Duration::from_hours(24)),
+        ("1week 2days 3h", Duration::from_hours(219)),
+        ("1h30m", Duration::from_mins(90)),
+        ("1.5s", Duration::from_millis(1500)),
+        ("0s", Duration::ZERO),
+    ] {
+        assert_eq!(super::parse_duration(input), Ok(expected), "{input}");
+    }
+    for input in [
+        "-1h",
+        "1month",
+        "1year",
+        "invalid",
+        "999999999999999999999s",
+    ] {
+        assert!(super::parse_duration(input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn update_overlap_outside_the_timestamp_range_fails_before_capture()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let input = directory.path().join("input.warc");
+    let output = directory.path().join("output.warc");
+    write_update_warc(
+        &input,
+        "https://example.invalid/",
+        "2026-08-19T00:00:00",
+        false,
+    )?;
+    let opts = Opts::try_parse_from([
+        "archivindex-wordpress-scraper",
+        "update-comments",
+        "--input",
+        input.to_str().expect("a UTF-8 path"),
+        "--output",
+        output.to_str().expect("a UTF-8 path"),
+        "--session-name",
+        "update",
+    ])?;
+    let Command::Update(mut options) = opts.command else {
+        panic!("expected the update command");
+    };
+    for overlap in [Duration::from_secs(1_000_000_000_000), Duration::MAX] {
+        options.overlap = overlap;
+        assert!(matches!(
+            super::update_comments(&options, true),
+            Err(Error::OverlapOutOfRange(value)) if value == overlap
+        ));
+        assert!(!output.exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn update_directory_reads_only_direct_warcs_in_domain_order()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -1261,8 +1318,8 @@ fn update_directory_merges_prior_multi_site_updates_by_site()
         ]
     );
     assert_eq!(
-        updates[0].anchor.datetime.to_rfc3339(),
-        "2026-08-20T00:00:00+00:00"
+        updates[0].anchor.datetime.to_string(),
+        "2026-08-20T00:00:00Z"
     );
     assert!(updates[0].anchor.from_comment);
     assert_eq!(
@@ -1293,8 +1350,8 @@ fn multi_domain_update_starts_each_via_chain_at_its_own_first_page()
         format!("http://127.0.0.1:{}/", second_server.port()),
     ];
     base_urls.sort();
-    let before = chrono::DateTime::parse_from_rfc3339("2026-08-21T00:00:00Z")?.with_timezone(&Utc);
-    let after = chrono::DateTime::parse_from_rfc3339("2026-08-19T00:00:00Z")?.with_timezone(&Utc);
+    let before = "2026-08-21T00:00:00Z".parse::<Timestamp>()?;
+    let after = "2026-08-19T00:00:00Z".parse::<Timestamp>()?;
     let runs = base_urls
         .iter()
         .map(|base_url| {

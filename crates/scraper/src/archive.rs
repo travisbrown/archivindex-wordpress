@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 use archivindex_archiver::Error;
 use archivindex_archiver::session::{Capture, Driver, Inspection, Request};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use url::Url;
 
 use crate::endpoint::{Collection, Endpoint, EndpointType, ROOT_ENDPOINTS, Registry};
@@ -84,7 +84,7 @@ impl Site {
     /// Characters other than ASCII letters, digits, `-`, `.`, `_`, and `~` are replaced with
     /// hyphens before the timestamp is appended.
     #[must_use]
-    pub fn session_name(&self, at: DateTime<Utc>) -> String {
+    pub fn session_name(&self, at: Timestamp) -> String {
         let location = self.base.strip_prefix("http://").unwrap_or(&self.base);
         let name = location
             .chars()
@@ -97,7 +97,7 @@ impl Site {
             })
             .collect::<String>();
 
-        format!("{name}-{}", at.timestamp())
+        format!("{name}-{}", at.as_second())
     }
 
     /// A resource's URL from its path relative to the installation root.
@@ -111,17 +111,10 @@ impl Site {
     }
 
     /// The URL of one page of an endpoint's collection, in ascending ID order up to `before`.
-    fn page_url(
-        &self,
-        endpoint: &str,
-        before: DateTime<Utc>,
-        page: usize,
-        per_page: usize,
-    ) -> String {
+    fn page_url(&self, endpoint: &str, before: Timestamp, page: usize, per_page: usize) -> String {
         format!(
-            "{}?before={}&orderby=id&order=asc&page={page}&per_page={per_page}",
+            "{}?before={before:.0}&orderby=id&order=asc&page={page}&per_page={per_page}",
             self.endpoint_url(endpoint),
-            before.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         )
     }
 }
@@ -196,7 +189,7 @@ pub struct ProbeResult {
 /// [`resume_with_probes`](Self::resume_with_probes) to construct a resumed driver.
 pub struct ArchiveDriver {
     site: Site,
-    before: DateTime<Utc>,
+    before: Timestamp,
     per_page: usize,
     endpoint_per_page: BTreeMap<String, usize>,
     /// Whether the run began with the root resources and every probe, which cannot be resumed.
@@ -305,7 +298,7 @@ impl ArchiveDriver {
     ///
     /// Every page requested carries `before` as its cutoff, so pass the time the archive started.
     #[must_use]
-    pub fn new(site: Site, before: DateTime<Utc>) -> Self {
+    pub fn new(site: Site, before: Timestamp) -> Self {
         Self {
             site,
             before,
@@ -368,7 +361,7 @@ impl ArchiveDriver {
     #[must_use]
     pub fn resume(
         site: Site,
-        before: DateTime<Utc>,
+        before: Timestamp,
         resumption: Resumption,
         custom: Vec<Collection>,
     ) -> Self {
@@ -411,7 +404,7 @@ impl ArchiveDriver {
     #[must_use]
     pub fn resume_with_probes(
         site: Site,
-        before: DateTime<Utc>,
+        before: Timestamp,
         resumption: Resumption,
         probes: Vec<ProbeResult>,
     ) -> Self {
@@ -744,7 +737,7 @@ impl fmt::Display for ArchiveDriver {
 mod tests {
     use archivindex_archiver::Error;
     use archivindex_archiver::session::{Capture, Driver, Inspection, Request};
-    use chrono::{DateTime, Utc};
+    use jiff::Timestamp;
 
     use super::{ArchiveDriver, Checkpoint, PaginationProgress, Resumption, Site};
     use crate::endpoint::{Collection, Endpoint, ROOT_ENDPOINTS, Registry};
@@ -765,10 +758,8 @@ mod tests {
     const TYPES_URL: &str = "https://example.com/blog/wp-json/wp/v2/types";
     const TAXONOMIES_URL: &str = "https://example.com/blog/wp-json/wp/v2/taxonomies";
 
-    fn before() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(BEFORE)
-            .map(|date| date.with_timezone(&Utc))
-            .expect("a test timestamp")
+    fn before() -> Timestamp {
+        BEFORE.parse::<Timestamp>().expect("a test timestamp")
     }
 
     fn site() -> Site {

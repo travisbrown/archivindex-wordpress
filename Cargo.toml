@@ -37,11 +37,10 @@ archivindex-warc-linter = { version = "0.1.0", git = "https://github.com/travisb
 archivindex-warc-ops = { version = "0.1.0", git = "https://github.com/travisbrown/archivindex-warc" }
 archivindex-wordpress-model = { version = "0.1.0", path = "crates/model" }
 archivindex-wordpress-scraper = { version = "0.1.0", path = "crates/scraper" }
-chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 flate2 = { version = "1", default-features = false, features = ["miniz_oxide"] }
-humantime = "2"
 indicatif = "0.18"
+jiff = { version = "1", default-features = false, features = ["std"] }
 log = "0.4"
 proptest = { version = "1.11", features = ["attr-macro"] }
 serde = { version = "1", features = ["derive"] }
@@ -49,6 +48,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["tracing-log"] }
 url = "2"
 # Match the experimental backend's observer-enabled fork.
 wreq = { version = "=0.16.1", default-features = false }

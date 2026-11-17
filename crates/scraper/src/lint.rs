@@ -9,6 +9,7 @@ use archivindex_http::message::ResponseMetadata;
 use archivindex_warc::io::read::WarcReader;
 use archivindex_warc::record::{Record, payload};
 use archivindex_warc_linter::{Custom, Finding, Findings, Linter, Rule, Severity, Violation};
+use jiff::Timestamp;
 use serde_json::Value;
 use url::Url;
 
@@ -767,7 +768,7 @@ fn page_query(url: &str) -> (Option<usize>, bool, Option<String>) {
         && page.is_some_and(|page| page > 0)
         && before
             .as_deref()
-            .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
+            .is_some_and(|value| value.parse::<Timestamp>().is_ok())
         && one("orderby") == Some("id")
         && one("order") == Some("asc")
         && one("per_page")

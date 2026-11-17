@@ -8,7 +8,9 @@ use archivindex_http::message::ResponseMetadata;
 use archivindex_warc::io::read::{self as warc_read, WarcReader};
 use archivindex_warc::record::extension::NoExtension;
 use archivindex_warc::record::{Record, payload};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use jiff::Timestamp;
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -41,7 +43,7 @@ pub struct CommentUpdateAnchor {
     /// Base URL of the archived `WordPress` installation.
     pub base_url: String,
     /// Latest valid comment datetime, or the archived request cutoff when no comment has one.
-    pub datetime: DateTime<Utc>,
+    pub datetime: Timestamp,
     /// Whether [`datetime`](Self::datetime) came from a comment rather than a request cutoff.
     pub from_comment: bool,
 }
@@ -407,8 +409,8 @@ fn collect_coverage<R: BufRead>(
 
 #[derive(Default)]
 struct UpdateContext {
-    latest_comment: Option<DateTime<Utc>>,
-    before: Option<DateTime<Utc>>,
+    latest_comment: Option<Timestamp>,
+    before: Option<Timestamp>,
 }
 
 fn collect_update_context<R: BufRead>(
@@ -501,7 +503,7 @@ fn comment_base_url(mut url: url::Url) -> Option<String> {
     Some(url.into())
 }
 
-fn query_datetime(url: &url::Url, name: &str) -> Option<DateTime<Utc>> {
+fn query_datetime(url: &url::Url, name: &str) -> Option<Timestamp> {
     let mut values = url
         .query_pairs()
         .filter_map(|(key, value)| (key == name).then_some(value));
@@ -510,15 +512,12 @@ fn query_datetime(url: &url::Url, name: &str) -> Option<DateTime<Utc>> {
     values.next().is_none().then_some(datetime)
 }
 
-fn parse_comment_datetime(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value)
-        .map(|date| date.with_timezone(&Utc))
-        .ok()
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
-                .map(|date| date.and_utc())
-                .ok()
-        })
+fn parse_comment_datetime(value: &str) -> Option<Timestamp> {
+    value.parse::<Timestamp>().ok().or_else(|| {
+        DateTime::strptime("%Y-%m-%dT%H:%M:%S", value)
+            .and_then(|date| Offset::UTC.to_timestamp(date))
+            .ok()
+    })
 }
 
 /// The target and HTTP metadata of a record that satisfies comments page coverage.
@@ -666,15 +665,37 @@ mod tests {
     use archivindex_warc::record::header::RevisitProfile;
     use archivindex_warc::record::header::truncated_type::TruncatedType;
     use archivindex_warc::value::{LabelledDigest, MediaType};
-    use chrono::Utc;
     use flate2::Compression;
     use flate2::write::GzEncoder;
+    use jiff::Timestamp;
     use serde_json::json;
 
     use super::{
         CommentConflict, Error, check_comment_collections, check_comment_completeness,
-        find_comment_update_anchor, find_comment_update_anchors, read_comments,
+        find_comment_update_anchor, find_comment_update_anchors, parse_comment_datetime,
+        read_comments,
     };
+
+    #[test]
+    fn comment_dates_accept_utc_fields_and_normalize_explicit_offsets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let expected = "2026-08-19T23:14:15Z".parse::<Timestamp>()?;
+        for value in [
+            "2026-08-19T23:14:15",
+            "2026-08-19T23:14:15Z",
+            "2026-08-20T01:14:15+02:00",
+        ] {
+            assert_eq!(parse_comment_datetime(value), Some(expected));
+        }
+        assert_eq!(
+            parse_comment_datetime("2026-08-20T01:14:15.123456789+02:00"),
+            Some("2026-08-19T23:14:15.123456789Z".parse()?)
+        );
+        for value in ["2026-02-30T12:00:00", "9999-12-31T23:59:59", "not a date"] {
+            assert_eq!(parse_comment_datetime(value), None);
+        }
+        Ok(())
+    }
 
     /// Write response records into a WARC fixture and return its temporary directory.
     fn fixture(
@@ -690,7 +711,8 @@ mod tests {
                  content-length: {}\r\n\r\n{body}",
                 body.len()
             );
-            let record: Record = Record::response(url, Utc::now())?.body(message.into_bytes())?;
+            let record: Record =
+                Record::response(url, Timestamp::now())?.body(message.into_bytes())?;
             warc_writer.write(&record.into_raw()?)?;
         }
         warc_writer.flush()?;
@@ -713,7 +735,7 @@ mod tests {
                 "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{total_pages}\
                  content-length: 2\r\n\r\n[]"
             );
-            let mut builder = Record::response(url, Utc::now())?;
+            let mut builder = Record::response(url, Timestamp::now())?;
             if let Some(inferred_type) = inferred_type {
                 builder =
                     builder.identified_payload_type(MediaType::parse(inferred_type.as_bytes())?);
@@ -888,7 +910,7 @@ mod tests {
         let mut writer = WarcWriter::from_path(&path)?;
         let accepted: Record = Record::revisit(
             "https://example.com/wp-json/wp/v2/comments?page=2&per_page=100",
-            Utc::now(),
+            Timestamp::now(),
             RevisitProfile::IDENTICAL_PAYLOAD_DIGEST,
         )?
         .content_type(MediaType::HTTP_RESPONSE)
@@ -899,7 +921,7 @@ mod tests {
         writer.write(&accepted.into_raw()?)?;
         let missing_type: Record = Record::revisit(
             "https://example.com/wp-json/wp/v2/comments?page=3&per_page=100",
-            Utc::now(),
+            Timestamp::now(),
             RevisitProfile::IDENTICAL_PAYLOAD_DIGEST,
         )?
         .content_type(MediaType::HTTP_RESPONSE)
@@ -909,7 +931,7 @@ mod tests {
         writer.write(&missing_type.into_raw()?)?;
         let wrong_status: Record = Record::revisit(
             "https://example.com/wp-json/wp/v2/comments?page=4&per_page=100",
-            Utc::now(),
+            Timestamp::now(),
             RevisitProfile::SERVER_NOT_MODIFIED,
         )?
         .content_type(MediaType::HTTP_RESPONSE)
@@ -1025,7 +1047,7 @@ mod tests {
         let anchor = find_comment_update_anchor(path)?;
 
         assert_eq!(anchor.base_url, "https://example.com/blog/");
-        assert_eq!(anchor.datetime.to_rfc3339(), "2026-08-19T13:14:15+00:00");
+        assert_eq!(anchor.datetime.to_string(), "2026-08-19T13:14:15Z");
         assert!(anchor.from_comment);
 
         Ok(())
@@ -1050,7 +1072,7 @@ mod tests {
         let anchor = find_comment_update_anchor(path)?;
 
         assert_eq!(anchor.base_url, "https://example.com/");
-        assert_eq!(anchor.datetime.to_rfc3339(), "2026-08-20T00:00:00+00:00");
+        assert_eq!(anchor.datetime.to_string(), "2026-08-20T00:00:00Z");
         assert!(!anchor.from_comment);
 
         Ok(())
@@ -1081,16 +1103,10 @@ mod tests {
 
         assert_eq!(anchors.len(), 2);
         assert_eq!(anchors[0].base_url, "https://alpha.example/blog/");
-        assert_eq!(
-            anchors[0].datetime.to_rfc3339(),
-            "2026-08-23T00:00:00+00:00"
-        );
+        assert_eq!(anchors[0].datetime.to_string(), "2026-08-23T00:00:00Z");
         assert!(!anchors[0].from_comment);
         assert_eq!(anchors[1].base_url, "https://zeta.example/");
-        assert_eq!(
-            anchors[1].datetime.to_rfc3339(),
-            "2026-08-22T00:00:00+00:00"
-        );
+        assert_eq!(anchors[1].datetime.to_string(), "2026-08-22T00:00:00Z");
         assert!(anchors[1].from_comment);
         assert!(matches!(
             find_comment_update_anchor(path),

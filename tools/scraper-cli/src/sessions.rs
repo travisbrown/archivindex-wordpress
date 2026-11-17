@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::Error;
 
@@ -130,7 +130,7 @@ impl SessionInventory {
     }
 
     pub fn next_name(&self, session: &str) -> Result<String, Error> {
-        let now = u64::try_from(Utc::now().timestamp())
+        let now = u64::try_from(Timestamp::now().as_second())
             .unwrap_or_default()
             .max(100_000_000);
         let latest = self

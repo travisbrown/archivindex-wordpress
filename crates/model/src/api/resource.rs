@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -130,7 +130,7 @@ pub struct Post {
 impl Post {
     /// The publication time, from the API's UTC field.
     #[must_use]
-    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+    pub fn timestamp(&self) -> Option<Timestamp> {
         self.publication.timestamp()
     }
 }
@@ -176,7 +176,7 @@ pub struct Page {
 impl Page {
     /// The publication time, from the API's UTC field.
     #[must_use]
-    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+    pub fn timestamp(&self) -> Option<Timestamp> {
         self.publication.timestamp()
     }
 }
@@ -273,7 +273,7 @@ pub struct Comment {
 impl Comment {
     /// The publication time, from the API's UTC field.
     #[must_use]
-    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+    pub fn timestamp(&self) -> Option<Timestamp> {
         self.publication.timestamp()
     }
 }

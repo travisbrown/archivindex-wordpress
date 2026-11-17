@@ -31,7 +31,9 @@ use std::collections::HashSet;
 use archivindex_archiver::Error;
 use archivindex_archiver::session::{Capture, Driver, Inspection, Request};
 use archivindex_wordpress_model::api::resource::Comment;
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use jiff::Timestamp;
+use jiff::civil::Date;
+use jiff::tz::Offset;
 use serde::Deserialize;
 use url::Url;
 
@@ -75,11 +77,11 @@ const CLOUDFLARE_CHALLENGE: &str = "Cloudflare requires an interactive browser c
 /// use archivindex_archiver::{Archiver, Config};
 /// use archivindex_archiver::session::Session;
 /// use archivindex_wordpress_scraper::CommentDriver;
-/// use chrono::{TimeDelta, Utc};
+/// use jiff::{Timestamp, SignedDuration};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let before = Utc::now();
-/// let after = before - TimeDelta::days(1);
+/// let before = Timestamp::now();
+/// let after = before.checked_sub(SignedDuration::from_hours(24))?;
 /// let driver = CommentDriver::for_window("https://example.com/", after, before)?;
 /// let config = Config {
 ///     operator: Some(Operator {
@@ -104,11 +106,11 @@ const CLOUDFLARE_CHALLENGE: &str = "Cloudflare requires an interactive browser c
 pub struct CommentDriver {
     endpoint: Url,
     site_name: String,
-    after: Option<DateTime<Utc>>,
-    before: DateTime<Utc>,
+    after: Option<Timestamp>,
+    before: Timestamp,
     seen_ids: HashSet<u64>,
-    first_date: Option<NaiveDate>,
-    last_date: Option<NaiveDate>,
+    first_date: Option<Date>,
+    last_date: Option<Date>,
     traversal: Traversal,
     force_second_sweep: bool,
 }
@@ -235,8 +237,8 @@ impl CommentDriver {
     /// Returns [`url::ParseError`] when `base_url` is not a URL.
     pub fn for_window(
         base_url: impl AsRef<str>,
-        after: DateTime<Utc>,
-        before: DateTime<Utc>,
+        after: Timestamp,
+        before: Timestamp,
     ) -> Result<Self, url::ParseError> {
         let mut driver = Self::with_before(base_url.as_ref(), before)?;
         driver.after = Some(after);
@@ -251,7 +253,7 @@ impl CommentDriver {
     }
 
     /// Construct a driver with an explicit snapshot cutoff.
-    fn with_before(base_url: &str, before: DateTime<Utc>) -> Result<Self, url::ParseError> {
+    fn with_before(base_url: &str, before: Timestamp) -> Result<Self, url::ParseError> {
         let mut base = Url::parse(base_url)?;
         base.set_query(None);
         base.set_fragment(None);
@@ -347,8 +349,8 @@ impl CommentDriver {
         Some(format!(
             "{} comments {first_id}-{last_id} ({} to {})",
             self.site_name,
-            first_date.date_naive(),
-            last_date.date_naive()
+            Offset::UTC.to_datetime(first_date).date(),
+            Offset::UTC.to_datetime(last_date).date()
         ))
     }
 }
@@ -437,7 +439,9 @@ impl Driver for CommentDriver {
         let title = self.title(&comments);
         for comment in &comments {
             if self.seen_ids.insert(comment.id)
-                && let Some(date) = comment.timestamp().map(|date| date.date_naive())
+                && let Some(date) = comment
+                    .timestamp()
+                    .map(|date| Offset::UTC.to_datetime(date).date())
             {
                 self.first_date = Some(self.first_date.map_or(date, |first| first.min(date)));
                 self.last_date = Some(self.last_date.map_or(date, |last| last.max(date)));
@@ -471,9 +475,9 @@ pub struct CommentProgress {
     /// Total comments reported by `WordPress` for the snapshot.
     pub total: usize,
     /// Earliest valid GMT date among downloaded comments.
-    pub first_date: Option<NaiveDate>,
+    pub first_date: Option<Date>,
     /// Latest valid GMT date among downloaded comments.
-    pub last_date: Option<NaiveDate>,
+    pub last_date: Option<Date>,
     /// Whether the driver completed a stable traversal of the snapshot.
     pub complete: bool,
 }
@@ -541,7 +545,7 @@ fn is_invalid_page_error(payload: &[u8]) -> bool {
 }
 
 /// The query requesting one page of a collection in ascending ID order within a time window.
-fn paging_query(after: Option<DateTime<Utc>>, before: DateTime<Utc>, page: usize) -> String {
+fn paging_query(after: Option<Timestamp>, before: Timestamp, page: usize) -> String {
     let after = after
         .map(format_timestamp)
         .map_or_else(String::new, |after| format!("after={after}&"));
@@ -553,8 +557,8 @@ fn paging_query(after: Option<DateTime<Utc>>, before: DateTime<Utc>, page: usize
 }
 
 /// Render a `WordPress` REST API timestamp at whole-second UTC precision.
-fn format_timestamp(timestamp: DateTime<Utc>) -> String {
-    timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)
+fn format_timestamp(timestamp: Timestamp) -> String {
+    format!("{timestamp:.0}")
 }
 
 /// The minimum and maximum of `items` in one pass, or `None` when there are none.
@@ -569,11 +573,11 @@ fn bounds<T: Copy + Ord>(mut items: impl Iterator<Item = T>) -> Option<(T, T)> {
 mod tests {
     use archivindex_archiver::Error;
     use archivindex_archiver::session::{Capture, Driver, Request};
-    use chrono::Utc;
+    use jiff::Timestamp;
     use proptest::prelude::*;
     use serde_json::json;
 
-    use super::{CommentDriver, CommentProgress, DateTime, bounds, format_timestamp};
+    use super::{CommentDriver, CommentProgress, bounds, format_timestamp};
     use crate::strategies;
 
     #[proptest::property_test]
@@ -585,20 +589,20 @@ mod tests {
 
     #[proptest::property_test]
     fn timestamps_are_rendered_at_whole_second_utc_precision(
-        #[strategy = strategies::datetime()] timestamp: DateTime<Utc>,
+        #[strategy = strategies::datetime()] timestamp: Timestamp,
     ) {
         let rendered = format_timestamp(timestamp);
-        let parsed = DateTime::parse_from_rfc3339(&rendered).unwrap();
+        let parsed = rendered.parse::<Timestamp>().unwrap();
 
         prop_assert!(rendered.ends_with('Z'));
-        prop_assert_eq!(parsed.timestamp(), timestamp.timestamp());
-        prop_assert_eq!(parsed.timestamp_subsec_nanos(), 0);
+        prop_assert_eq!(parsed.as_second(), timestamp.as_second());
+        prop_assert_eq!(parsed.subsec_nanosecond(), 0);
     }
 
     #[proptest::property_test]
     fn comment_urls_query_the_endpoint_of_the_site(
         #[strategy = archivindex_test_support::prop::http_url()] base: url::Url,
-        #[strategy = strategies::datetime()] before: DateTime<Utc>,
+        #[strategy = strategies::datetime()] before: Timestamp,
         #[strategy = 1..=100_usize] page: usize,
     ) {
         let driver = CommentDriver::with_before(base.as_str(), before).unwrap();
@@ -617,10 +621,21 @@ mod tests {
 
     const BEFORE: &str = "2026-08-20T00:00:00Z";
 
-    fn timestamp(value: &str) -> chrono::DateTime<Utc> {
-        chrono::DateTime::parse_from_rfc3339(value)
-            .map(|date| date.with_timezone(&Utc))
-            .expect("a test timestamp")
+    #[test]
+    fn query_timestamps_normalize_offsets_and_truncate_fractional_seconds() {
+        for (input, expected) in [
+            (
+                "2026-08-20T01:14:15.999999999+02:00",
+                "2026-08-19T23:14:15Z",
+            ),
+            ("1969-12-31T23:59:59.999999999Z", "1969-12-31T23:59:59Z"),
+        ] {
+            assert_eq!(format_timestamp(timestamp(input)), expected);
+        }
+    }
+
+    fn timestamp(value: &str) -> Timestamp {
+        value.parse::<Timestamp>().expect("a test timestamp")
     }
 
     fn comment(id: u64, date_gmt: &str) -> serde_json::Value {
@@ -751,8 +766,8 @@ mod tests {
         let progress = CommentProgress {
             downloaded: 2,
             total: 101,
-            first_date: Some(timestamp("2020-11-28T00:00:00Z").date_naive()),
-            last_date: Some(timestamp("2020-11-30T00:00:00Z").date_naive()),
+            first_date: Some(jiff::civil::date(2020, 11, 28)),
+            last_date: Some(jiff::civil::date(2020, 11, 30)),
             complete: false,
         };
         assert_eq!(driver.progress(), Some(progress));
