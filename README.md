@@ -49,7 +49,8 @@ cargo build --release -p archivindex-wordpress-scraper-cli --features wreq
 
 This feature requires Rust 1.98 or later, a C and C++ compiler, CMake, and libclang. It builds
 BoringSSL from source and uses the observer-enabled wreq fork pinned in `Cargo.lock`. The workspace
-also patches `btls`, `btls-sys`, and `tokio-btls` to the source revision required by that fork.
+also pins `wreq-util`, `btls`, `btls-sys`, `tokio-btls`, `http2`, and `netty` to compatible source
+revisions for the HTTP client.
 The shared HTTP crates come from `archivindex`, and the archiver and WARC crates come from
 `archivindex-warc`. Both use `main`, with exact commits pinned in `Cargo.lock`. No local checkout
 of either repository is required.

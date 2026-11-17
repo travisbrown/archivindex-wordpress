@@ -16,6 +16,7 @@ version = 2
 allow = [
   "0BSD",
   "Apache-2.0",
+  "BSD-2-Clause",
   "BSD-3-Clause",
   "CC0-1.0",
   "CDLA-Permissive-2.0",
@@ -39,6 +40,9 @@ allow-git = [
   "https://github.com/travisbrown/archivindex-warc",
   # The experimental backend needs the unreleased connection observer API.
   "https://github.com/travisbrown/wreq",
-  # The fork requires unpublished btls APIs, pinned to the HTTP client's revision.
+  "https://github.com/travisbrown/wreq-util",
+  # The HTTP client requires unpublished TLS and HTTP codec APIs.
   "https://github.com/0x676e67/btls",
+  "https://github.com/0x676e67/http2",
+  "https://github.com/0x676e67/netty",
 ]
