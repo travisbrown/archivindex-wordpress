@@ -120,7 +120,7 @@ pub fn combine_archives(options: &CombineOptions) -> Result<CombineSummary, Erro
     if result.is_err()
         && let Err(error) = std::fs::remove_file(&options.output)
     {
-        log::warn!(
+        tracing::warn!(
             "could not remove partial combined output {}: {error}",
             options.output.display()
         );

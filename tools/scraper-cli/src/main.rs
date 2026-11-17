@@ -87,7 +87,7 @@ fn wreq_test(options: &WreqTestOptions, mut output: impl Write) -> Result<Comman
             client
         };
         let response = client.build()?.get(url.as_str()).send().await?;
-        log::info!(
+        tracing::info!(
             "{}: {:?} {}",
             response.uri(),
             response.version(),
@@ -119,15 +119,15 @@ fn combine_wp_archives(options: &CombineOptions, quiet: bool) -> Result<CommandO
 /// Validate the capture graph and collection pagination protocol of an archive WARC.
 fn lint_wp_archive(options: &LintOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let report = lint_archive(&options.input)?;
-    log::info!("core lints passed: {}", report.core_lints_passed);
+    tracing::info!("core lints passed: {}", report.core_lints_passed);
     for finding in &report.findings {
         let subject = finding.subject.as_ref().map_or_else(
             || "the file".to_owned(),
             |subject| format!("record {}", subject.index),
         );
         match finding.violation.severity() {
-            Severity::Error => log::error!("{subject}: {}", finding.violation),
-            Severity::Warning => log::warn!("{subject}: {}", finding.violation),
+            Severity::Error => tracing::error!("{subject}: {}", finding.violation),
+            Severity::Warning => tracing::warn!("{subject}: {}", finding.violation),
         }
     }
 
@@ -275,7 +275,7 @@ fn resume_archive(options: &ResumeArchiveOptions, quiet: bool) -> Result<Command
 fn resume_info(options: &ResumeInfoOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let info = inspect_archive(&options.input)?;
     for warning in &info.warnings {
-        log::warn!("{warning}");
+        tracing::warn!("{warning}");
     }
 
     match info.checkpoint {
@@ -407,14 +407,14 @@ fn run_archive_for_session(
             Ok(CommandOutcome::Success)
         }
         Checkpoint::Finished => {
-            log::warn!(
+            tracing::warn!(
                 "the archive session reported problems after its final driver checkpoint; \
                  start a new archive to guarantee completeness"
             );
             Ok(CommandOutcome::ReportedProblems)
         }
         Checkpoint::Resume(_) => {
-            log::warn!("a partial archive was published at {}", output.display());
+            tracing::warn!("a partial archive was published at {}", output.display());
             println!(
                 "Continue the archive with: {}",
                 resume_command(
@@ -501,16 +501,16 @@ fn report_archive_problems(
     options: &ArchiveRunOptions,
 ) {
     for failure in &summary.failures {
-        log::warn!("Failed to capture {}: {}", failure.url, failure.error);
+        tracing::warn!("Failed to capture {}: {}", failure.url, failure.error);
     }
     if let Some(error) = &summary.fatal_error {
-        log::warn!("The session ended early: {error}");
+        tracing::warn!("The session ended early: {error}");
     }
     if summary.cancelled {
-        log::warn!("the session was cancelled before all requested captures were completed");
+        tracing::warn!("the session was cancelled before all requested captures were completed");
     }
     if summary.partial_captures() > 0 {
-        log::warn!(
+        tracing::warn!(
             "{} capture(s) were unexpectedly truncated",
             summary.partial_captures()
         );
@@ -518,9 +518,9 @@ fn report_archive_problems(
     for (endpoint, status) in driver.probed() {
         let status = *status;
         if status == 404 {
-            log::info!("{} does not expose {endpoint}", options.base.base());
+            tracing::info!("{} does not expose {endpoint}", options.base.base());
         } else if !(200..300).contains(&status) && status != 304 {
-            log::warn!(
+            tracing::warn!(
                 "{} answered the {endpoint} probe with status {status}; the endpoint was skipped",
                 options.base.base()
             );
@@ -548,7 +548,7 @@ fn summary_has_pagination(summary: &SessionSummary) -> bool {
 
 fn report_resume_warnings(path: &Path, warnings: &[String]) {
     for warning in warnings {
-        log::warn!("{}: {warning}", path.display());
+        tracing::warn!("{}: {warning}", path.display());
     }
 }
 
@@ -768,7 +768,7 @@ fn update_comments(options: &UpdateCommentsOptions, quiet: bool) -> Result<Comma
             if after >= before {
                 return Err(Error::InvalidUpdateWindow { after, before });
             }
-            log::info!(
+            tracing::info!(
                 "updating {} comments from {} after {after} and before {before} (anchor from {})",
                 update.anchor.base_url,
                 update.path.display(),
@@ -988,19 +988,19 @@ fn report_comment_run(
     quiet: bool,
 ) -> CommandOutcome {
     for failure in &summary.failures {
-        log::warn!("Failed to capture {}: {}", failure.url, failure.error);
+        tracing::warn!("Failed to capture {}: {}", failure.url, failure.error);
     }
     if let Some(error) = &summary.fatal_error {
-        log::warn!("The session ended early: {error}");
+        tracing::warn!("The session ended early: {error}");
     }
     if summary.cancelled {
-        log::warn!("The session was interrupted");
+        tracing::warn!("The session was interrupted");
     }
 
     for (site_url, snapshot) in comment_progress.iter() {
         if let Some(snapshot) = snapshot {
             if let Some(shortfall) = snapshot.visibility_shortfall() {
-                log::warn!(
+                tracing::warn!(
                     "WordPress counted {} comments for {} before visibility filtering but returned {} visible comments ({shortfall} omitted)",
                     snapshot.total,
                     site_url,
@@ -1021,7 +1021,7 @@ fn report_comment_run(
     if summary.is_complete() {
         CommandOutcome::Success
     } else {
-        log::warn!("a partial archive was published at {}", output.display());
+        tracing::warn!("a partial archive was published at {}", output.display());
 
         CommandOutcome::ReportedProblems
     }
@@ -1117,7 +1117,7 @@ fn read_wp_comments(options: ReadCommentsOptions) -> Result<CommandOutcome, Erro
     }
 
     for warning in &result.warnings {
-        log::warn!(
+        tracing::warn!(
             "Conflicting objects for WordPress comment {}: {} != {}",
             warning.id,
             warning.first,
@@ -1134,7 +1134,7 @@ fn read_wp_comments(options: ReadCommentsOptions) -> Result<CommandOutcome, Erro
 fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<CommandOutcome, Error> {
     let collections = check_comment_collections(&options.input)?;
     if collections.is_empty() {
-        log::warn!(
+        tracing::warn!(
             "{} has no qualifying WordPress comments capture",
             options.input.display()
         );
@@ -1152,7 +1152,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
         reported_problems |= !complete || total_changed;
 
         if let Some(warning) = page_total_change_warning(&coverage) {
-            log::warn!("{}: {warning}", collection.endpoint);
+            tracing::warn!("{}: {warning}", collection.endpoint);
         }
         if complete {
             if !quiet {
@@ -1169,7 +1169,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
         }
 
         match coverage.total_pages {
-            None => log::warn!(
+            None => tracing::warn!(
                 "{} has no qualifying record with a valid X-WP-TotalPages header for {}",
                 options.input.display(),
                 collection.endpoint
@@ -1182,7 +1182,7 @@ fn check_wp_comments(options: &CheckCommentsOptions, quiet: bool) -> Result<Comm
                 let shown = missing.by_ref().take(20).collect::<Vec<_>>();
                 let suffix = (missing_count > shown.len())
                     .then(|| format!(" (and {} more)", missing_count - shown.len()));
-                log::warn!(
+                tracing::warn!(
                     "{} is missing qualifying records for {} of {} advertised pages for {}: {}{}",
                     options.input.display(),
                     missing_count,
@@ -1248,18 +1248,18 @@ fn complete_wp_comments(
 fn report_completion_problems(summary: &CommentCompletionSummary) {
     if let Some(archive) = &summary.archive {
         for failure in &archive.failures {
-            log::warn!("Failed to capture {}: {}", failure.url, failure.error);
+            tracing::warn!("Failed to capture {}: {}", failure.url, failure.error);
         }
         if archive.cancelled {
-            log::warn!("comment completion was cancelled before every request was made");
+            tracing::warn!("comment completion was cancelled before every request was made");
         }
         let partial = archive.partial_captures();
         if partial > 0 {
-            log::warn!("{partial} comment page captures were unexpectedly truncated");
+            tracing::warn!("{partial} comment page captures were unexpectedly truncated");
         }
     }
     if !summary.uncaptured_pages.is_empty() {
-        log::warn!(
+        tracing::warn!(
             "no qualifying response was captured for comment pages {}",
             summary
                 .uncaptured_pages

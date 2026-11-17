@@ -41,14 +41,13 @@ clap = { version = "4.5", features = ["derive"] }
 flate2 = { version = "1", default-features = false, features = ["miniz_oxide"] }
 indicatif = "0.18"
 jiff = { version = "1", default-features = false, features = ["std"] }
-log = "0.4"
 proptest = { version = "1.11", features = ["attr-macro"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt"] }
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["tracing-log"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 url = "2"
 # Match the experimental backend's observer-enabled fork.
 wreq = { version = "=0.16.1", default-features = false }

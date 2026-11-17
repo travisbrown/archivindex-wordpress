@@ -6,9 +6,10 @@ use archivindex_warc::io::write::WarcWriter;
 use archivindex_warc::record::Record;
 use jiff::Timestamp;
 
-/// The shared subscriber must still receive this CLI's log events and apply verbosity filters.
+/// The shared subscriber receives this CLI's tracing events and applies verbosity filters.
 #[test]
-fn log_diagnostics_follow_the_shared_verbosity_setting() -> Result<(), Box<dyn std::error::Error>> {
+fn tracing_diagnostics_follow_the_shared_verbosity_setting()
+-> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let input = directory.path().join("comments.warc");
     let record: Record = Record::request("https://example.com/wp-json", Timestamp::now())?
@@ -16,19 +17,27 @@ fn log_diagnostics_follow_the_shared_verbosity_setting() -> Result<(), Box<dyn s
     let mut writer = WarcWriter::from_path(&input)?;
     writer.write(&record.into_raw()?)?;
     writer.flush()?;
-    for (flags, expected) in [(vec!["-v"], 1), (vec![], 0), (vec!["--quiet"], 0)] {
-        let output = Command::new(env!("CARGO_BIN_EXE_archivindex-wordpress-scraper"))
-            .args(["lint", "--input"])
-            .arg(&input)
-            .args(flags)
-            .output()?;
-        let stderr = String::from_utf8(output.stderr)?;
-        assert_eq!(output.status.code(), Some(1), "{stderr}");
-        assert_eq!(
-            stderr.matches("core lints passed:").count(),
-            expected,
-            "{stderr}"
-        );
+    for (command, message, counts) in [
+        ("lint", "core lints passed:", [1, 0, 0]),
+        (
+            "check-comments",
+            "has no qualifying WordPress comments capture",
+            [1, 1, 0],
+        ),
+    ] {
+        for (flags, expected) in [vec!["-v"], vec![], vec!["--quiet"]]
+            .into_iter()
+            .zip(counts)
+        {
+            let output = Command::new(env!("CARGO_BIN_EXE_archivindex-wordpress-scraper"))
+                .args([command, "--input"])
+                .arg(&input)
+                .args(flags)
+                .output()?;
+            let stderr = String::from_utf8(output.stderr)?;
+            assert_eq!(output.status.code(), Some(1), "{stderr}");
+            assert_eq!(stderr.matches(message).count(), expected, "{stderr}");
+        }
     }
     Ok(())
 }
