@@ -128,6 +128,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_authentication_variant_roundtrips_without_accepting_elements()
+    -> Result<(), serde_json::Error> {
+        let authentication = serde_json::from_str::<Authentication>("[]")?;
+        assert_eq!(authentication, Authentication::Empty([]));
+        assert_eq!(serde_json::to_string(&authentication)?, "[]");
+
+        for value in ["[null]", "[false]", "[1]", r#"["method"]"#, "[{}]", "[[]]"] {
+            assert!(
+                !matches!(
+                    serde_json::from_str::<Authentication>(value),
+                    Ok(Authentication::Empty(_))
+                ),
+                "{value}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn api_discovery_documents_and_errors_parse() {
         let root = serde_json::from_value::<ApiRoot>(json!({
             "name": "Example",

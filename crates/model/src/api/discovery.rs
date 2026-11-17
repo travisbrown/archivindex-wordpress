@@ -37,7 +37,7 @@ pub enum TemplateLockMode {
 #[serde(untagged)]
 pub enum Authentication {
     Methods(AuthenticationMethods),
-    Empty(Vec<NoAuthenticationMethod>),
+    Empty([(); 0]),
 }
 
 /// Authentication methods advertised by newer REST API roots.
@@ -47,10 +47,6 @@ pub struct AuthenticationMethods {
     #[serde(rename = "application-passwords")]
     pub application_passwords: Option<ApplicationPasswords>,
 }
-
-/// An uninhabited type that restricts legacy authentication arrays to empty arrays.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum NoAuthenticationMethod {}
 
 /// `WordPress` application-password authentication metadata.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
